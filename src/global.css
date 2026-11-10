@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@import "uniwind";
+
+@import "heroui-native/styles";
+@source "../node_modules/heroui-native/lib";
+
+/* ------------------------------------------------------------------ *
+ * ZYRAVA token bridge — mirrors the web app/globals.css @theme inline
+ * block, mapped onto the same HeroUI v3 semantic variables that
+ * heroui-native ships (background/surface/overlay/accent/…).
+ * ------------------------------------------------------------------ */
+@theme inline {
+  /* Surfaces */
+  --color-surface-muted: var(--surface-secondary);
+  --color-surface-inset: var(--surface-secondary);
+  --color-surface-strong: var(--surface-tertiary);
+
+  /* Text */
+  --color-muted-foreground: var(--muted);
+  --color-faint-foreground: color-mix(in oklab, var(--muted) 74%, transparent);
+
+  /* Borders */
+  --color-border-strong: var(--border-tertiary);
+
+  /* Brand == HeroUI accent */
+  --color-brand: var(--accent);
+  --color-brand-hover: var(--accent-hover);
+  --color-brand-active: color-mix(in oklab, var(--accent) 85%, var(--accent-foreground) 15%);
+  --color-brand-foreground: var(--accent-foreground);
+  --color-brand-soft: var(--accent-soft);
+  --color-brand-soft-foreground: var(--accent-soft-foreground);
+
+  /* Soft status text that stays readable on soft backgrounds */
+  --color-success-soft: var(--success-soft);
+  --color-success-soft-foreground: var(--success-soft-foreground);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-soft-foreground: var(--warning-soft-foreground);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-soft-foreground: var(--danger-soft-foreground);
+
+  /* Info (HeroUI has no info hue) */
+  --color-info: light-dark(oklch(0.55 0.16 255), oklch(0.71 0.14 255));
+  --color-info-soft: color-mix(in oklab, var(--color-info) 15%, transparent);
+  --color-info-soft-foreground: color-mix(in oklab, var(--color-info) 72%, var(--foreground) 28%);
+
+  /* Charts — fixed across themes so series keep their identity */
+  --color-chart-1: oklch(0.64 0.2 6);
+  --color-chart-2: oklch(0.62 0.15 255);
+  --color-chart-3: oklch(0.75 0.15 75);
+  --color-chart-4: oklch(0.66 0.14 158);
+  --color-chart-5: oklch(0.62 0.17 300);
+  --color-chart-6: oklch(0.7 0.12 205);
+  --color-chart-7: oklch(0.68 0.13 20);
+  --color-chart-8: oklch(0.6 0.12 120);
+
+  /* Player chrome */
+  --color-bar: oklch(0.21 0.012 300);
+  --color-bar-edge: oklch(1 0 0 / 10%);
+}
+
+/* Accent identity from the web app — the emerald/teal brand. */
+:root {
+  @variant light {
+    --accent: oklch(0.62 0.13 175);
+    --background: #ffffff;
+  }
+
+  @variant dark {
+    --accent: oklch(0.78 0.13 170);
+    --background: #17111c;
+  }
+}
