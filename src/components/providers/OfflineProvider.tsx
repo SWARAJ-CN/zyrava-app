@@ -299,7 +299,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
       /* collectPickedFiles carries the web's audio-name filter and max-files
          cap; the max-bytes cap that IMPORT_LIMITS applied lands right after it
          so over-long files never reach the store. */
-      const capped = collectPickedFiles(result, IMPORT_LIMITS.maxFiles).filter(
+      const capped = (await collectPickedFiles(result, IMPORT_LIMITS.maxFiles)).filter(
         (asset) => (asset.size ?? 0) <= IMPORT_LIMITS.maxBytes
       );
       if (!capped.length) {
@@ -338,7 +338,7 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
             imageLarge: "",
             duration: await readDuration(file.uri),
             bytes: file.size ?? 0,
-            mime: file.mimeType || file.type || "audio/mp4",
+            mime: file.mimeType || "audio/mp4",
             fileName: file.name,
             addedAt: Date.now(),
           };
@@ -366,45 +366,40 @@ export function OfflineProvider({ children }: { children: ReactNode }) {
     [error, success, toast]
   );
 
-  const presentPicker = useCallback(async () => {
-    const result = await DocumentPicker.presentAsync({
-      type: ["*/*"],
-      multiSelect: true,
-      allowEditing: false,
-    });
-    if (result.canceled || !result.assets?.length) return null;
-    return result.assets;
+  const pickDocuments = useCallback(async (): Promise<PickedResult> => {
+    // The web's showDirectoryPicker/showSaveFilePicker and its "zyrava-songs"
+    // id concept fold into one multi-select document sheet on native.
+    return DocumentPicker.getDocumentAsync({ type: "*/*", multiple: true });
   }, []);
 
   const importFolder = useCallback(async () => {
     setImporting({ done: 0, total: 0 });
     try {
-      // The web pinned a folder with the id "zyrava-songs" after one click;
-      // the native picker cannot hold a folder handle, so it opens as a
-      // multi-select over the same songs instead.
-      const assets = await presentPicker();
+      const result = await pickDocuments();
       setImporting(null);
-      if (assets) await addFiles(assets);
+      // A dismissal is silent, exactly like the web's AbortError branch.
+      if (!result.canceled) await addFiles(result);
     } catch (caught: unknown) {
       setImporting(null);
       if (caught instanceof Error && caught.name === "AbortError") return;
       error("That folder couldn't be read", "Try choosing the files themselves instead.");
     }
-  }, [addFiles, error, presentPicker]);
+  }, [addFiles, error, pickDocuments]);
 
   const importFiles = useCallback(async () => {
     try {
-      const assets = await presentPicker();
-      if (assets) await addFiles(assets);
+      const result = await pickDocuments();
+      if (!result.canceled) await addFiles(result);
     } catch {
       /* the sheet was dismissed — nothing was owed a toast */
     }
-  }, [addFiles, presentPicker]);
+  }, [addFiles, pickDocuments]);
 
   const openPlaybackUrl = useCallback(async (id: string) => {
     /* Stands in for the web's object-URL slot: the saved file's URI is stable,
        so there is nothing to revoke and no dead-URL switch to guard. */
-    return getTrackUri(id);
+    const uri = await getTrackUri(id);
+    return uri ?? null;
   }, []);
 
   const value = useMemo<OfflineValue>(

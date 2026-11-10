@@ -28,7 +28,6 @@ import { OfflineProvider } from "@/components/providers/OfflineProvider";
 import { MusicPlayerProvider } from "@/components/providers/MusicPlayerProvider";
 import { LibraryProvider } from "@/components/providers/LibraryProvider";
 import { PlaybackSessionGuard } from "@/components/providers/PlaybackSessionGuard";
-import { AppChrome } from "@/components/AppChrome";
 import { AuthGate } from "@/components/auth/AuthGate";
 
 /* Hold the native splash until storage is hydrated and Inter is live — the
@@ -79,11 +78,7 @@ export default function RootLayout(): JSX.Element | null {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <HeroUINativeProvider
-          config={{
-            toast: { placement: "bottom end" },
-          }}
-        >
+        <HeroUINativeProvider>
           <I18nProvider initialLocale={initialLocale}>
             <PwaProvider>
               <VisitBeacon />
@@ -98,7 +93,10 @@ export default function RootLayout(): JSX.Element | null {
                             <MusicPlayerProvider>
                               <LibraryProvider>
                                 <PlaybackSessionGuard />
-                                <AppChrome />
+                                {/* AppChrome lives in (app)/_layout, so the shell
+                                    paints over every music screen without a second
+                                    copy on the account routes — the web's root-level
+                                    mount, expressed through the route groups. */}
                                 <AuthGate>
                                   <Stack screenOptions={{ headerShown: false }}>
                                     <Stack.Screen name="(auth)" />

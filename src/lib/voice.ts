@@ -835,14 +835,17 @@ export function collectSpeech(
   return { text, readings, lastFinal: final };
 }
 
-/** Chrome and Edge expose this; Firefox and Safari do not (as of writing). */
-export function getSpeechRecognition(): SpeechRecognitionConstructor | null {
-  // React Native has no Web Speech API — neither `SpeechRecognition` nor the
-  // prefixed `webkitSpeechRecognition` exists on device, so the recogniser is
-  // never available here. Nothing in the app instantiated it either (see
-  // PORTING_CONVENTIONS §15): the grammar above scores plain-text phrases, and
-  // `suggestVoiceCommands` keeps working unchanged.
-  return null;
+/**
+ * Chrome and Edge expose this; Firefox and Safari do not (as of writing).
+ *
+ * React Native has no Web Speech API — neither `SpeechRecognition` nor the
+ * prefixed `webkitSpeechRecognition` exists on device, so the recogniser is
+ * never available here. Nothing in the app instantiated it either (see
+ * PORTING_CONVENTIONS §15): the grammar above scores plain-text phrases, and
+ * `suggestVoiceCommands` keeps working unchanged.
+ */
+export function getSpeechRecognition(): SpeechRecognitionConstructor | undefined {
+  return undefined;
 }
 
 /* ---------------------------------------------------------------- language */

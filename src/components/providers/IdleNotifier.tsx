@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
 import * as Notifications from "expo-notifications";
+import { AndroidImportance, SchedulableTriggerInputTypes } from "expo-notifications";
 import { getItem, setItem } from "@/lib/store";
 
 /** Inactivity before the first wake-up nudge. */
@@ -48,7 +49,7 @@ async function push(body: string, at: number): Promise<void> {
       identifier: IDLE_TAG,
       content: { title: "ZYRAVA", body, data: {} },
       trigger: {
-        type: Notifications.SchedulableTriggerInputTypes.DATE,
+        type: SchedulableTriggerInputTypes.DATE,
         date: new Date(Math.max(at, Date.now() + 1_000)),
       },
     });
@@ -92,7 +93,7 @@ export function IdleNotifier() {
       // The channel that carries every zyrava-idle wake-up.
       void Notifications.setNotificationChannelAsync(IDLE_TAG, {
         name: "ZYRAVA",
-        importance: Notifications.AndroidImportance.DEFAULT,
+        importance: AndroidImportance.DEFAULT,
       }).catch(() => undefined);
     }
 

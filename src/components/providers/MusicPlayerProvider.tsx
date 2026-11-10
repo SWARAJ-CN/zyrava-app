@@ -16,8 +16,10 @@ import {
   PlaybackNotificationManager,
   useAudioTagContext,
   type AudioTagHandle,
+  type AudioNode as RnAudioNode,
+  type AudioParam as RnAudioParam,
+  type AudioBuffer as RnAudioBuffer,
   type BiquadFilterNode,
-  type ChannelSplitterNode,
   type ConvolverNode,
   type GainNode,
   type StereoPannerNode,
@@ -230,11 +232,11 @@ const FX_SILENCE: FxLevels = {
  * ------------------------------------------------------------------ */
 interface ParamShim {
   value: number;
-  setTargetAtTime(value: number): void;
+  setTargetAtTime(value: number, startTime?: number, timeConstant?: number): void;
 }
 
 class ApproxCompressor {
-  readonly node: GainNode;
+  readonly node: GainNode | WaveShaperNode;
   private readonly shaper: WaveShaperNode | null;
   private readonly thresholdLin = { value: 1 };
   threshold: ParamShim;
@@ -245,7 +247,7 @@ class ApproxCompressor {
 
   constructor(
     private readonly context: AudioContext,
-    node: GainNode,
+    node: GainNode | WaveShaperNode,
     shaper: WaveShaperNode | null
   ) {
     this.node = node;
@@ -322,7 +324,7 @@ function createCompressorStage(
  * Synthesized wet-noise impulse for the reverb convolver (unit-energy
  * normalised so the wet crossfade alone decides how much room is heard).
  */
-function makeReverbIr(context: AudioContext, seconds = 1.4, decay = 2.6): AudioBuffer {
+function makeReverbIr(context: AudioContext, seconds = 1.4, decay = 2.6): RnAudioBuffer {
   const rate = context.sampleRate;
   const length = Math.floor(seconds * rate);
   const buffer = context.createBuffer(2, length, rate);
@@ -573,7 +575,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   /** Post-balance stereo meter taps for the console's VU bridge. */
   const metersRef = useRef<[RnAnalyserNode | null, RnAnalyserNode | null]>([null, null]);
   /** The node the routing currently feeds — reconnects only on real changes. */
-  const routeTargetRef = useRef<AudioNode | null>(null);
+  const routeTargetRef = useRef<RnAudioNode | null>(null);
   /** Low-cut stage state + mirror for the graph build. */
   const [loCut, setLoCutState] = useState(false);
   const loCutRef = useRef(loCut);
@@ -621,7 +623,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const spatialCleanupRef = useRef<() => void>(() => {});
   const spatialModeRef = useRef<SpatialMode>(spatialMode);
   /** The element's tap into the audio graph (created at most once). */
-  const mediaSourceRef = useRef<AudioNode | null>(null);
+  const mediaSourceRef = useRef<RnAudioNode | null>(null);
   // Play intent is read at track-switch time; state would force the loader
   // effect to re-run on clicks.
   const shouldPlayRef = useRef(false);
@@ -749,7 +751,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
       if (mode === "3d") {
         const panner = ctx.createPanner();
-        panner.panningModel = "HRTF";
+        /* The native engine's panner is equalpower for now (HRTF is on the
+           library roadmap); the binaural drift below carries the 3D feel. */
         panner.distanceModel = "inverse";
         panner.refDistance = 0.5;
         panner.rolloffFactor = 0.4;
@@ -987,7 +990,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const applyFX = useCallback(() => {
     const ctx = audioContextRef.current;
     if (!ctx) return;
-    const glide = (param: AudioParam | ParamShim, value: number, tc = 0.04) =>
+    const glide = (param: RnAudioParam | ParamShim, value: number, tc = 0.04) =>
       param.setTargetAtTime(value, ctx.currentTime, tc);
     const stages = fxStagesRef.current;
     if (stages) {
@@ -1069,7 +1072,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     if ((eqOn || spaceOn || djEngagedRef.current) && !rackReadyRef.current) {
       ensureRackRef.current();
     }
-    const target: AudioNode =
+    const target: RnAudioNode =
       filtersRef.current.length > 0
         ? filtersRef.current[0]
         : djOutRef.current ?? ctx.destination;
@@ -1101,7 +1104,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     if (analyserRef.current) return analyserRef.current;
     if (!handle) return null;
     try {
-      let sourceNode: AudioNode;
+      let sourceNode: RnAudioNode;
       if (mediaSourceRef.current) {
         sourceNode = mediaSourceRef.current;
       } else {
@@ -1219,7 +1222,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const spaceOut = ctx.createGain();
       const eqTrim = ctx.createGain();
       eqTrim.gain.value = eqMakeupGain(eqGainsRef.current);
-      let node: AudioNode = filters[0];
+      let node: RnAudioNode = filters[0];
       for (let filterIndex = 1; filterIndex < filters.length; filterIndex += 1) {
         node.connect(filters[filterIndex]);
         node = filters[filterIndex];
@@ -1327,7 +1330,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const phDepth = ctx.createGain();
       phDepth.gain.value = 520;
       phLfo.connect(phDepth);
-      let phNode: AudioNode = stages.get("phaser")!.input;
+      let phNode: RnAudioNode = stages.get("phaser")!.input;
       [280, 740, 1700, 2800].forEach((freq) => {
         const allPass = ctx.createBiquadFilter();
         allPass.type = "allpass";
@@ -1370,8 +1373,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       stDepth.connect(stGain.gain);
       stLfo.start();
 
-      let chain: AudioNode = djIn;
-      const link = (stage: AudioNode) => {
+      let chain: RnAudioNode = djIn;
+      const link = (stage: RnAudioNode) => {
         chain.connect(stage);
         chain = stage;
       };
@@ -1918,14 +1921,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       PlaybackNotificationManager.addEventListener("playbackNotificationStop", () =>
         transportRef.current?.stop()
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationSeekBackward", (event) =>
-        transportRef.current?.seek(Math.max(0, positionRef.current - (event?.value ?? 10)))
+      PlaybackNotificationManager.addEventListener("playbackNotificationSkipBackward", (event) =>
+        transportRef.current?.seek(Math.max(0, positionRef.current - (event.value ?? 10)))
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationSeekForward", (event) =>
-        transportRef.current?.seek(positionRef.current + (event?.value ?? 10))
+      PlaybackNotificationManager.addEventListener("playbackNotificationSkipForward", (event) =>
+        transportRef.current?.seek(positionRef.current + (event.value ?? 10))
       ),
       PlaybackNotificationManager.addEventListener("playbackNotificationSeekTo", (event) => {
-        if (typeof event?.value === "number") transportRef.current?.seek(event.value);
+        if (typeof event.value === "number") transportRef.current?.seek(event.value);
       }),
     ];
     return () => subs.forEach((sub) => sub?.remove());

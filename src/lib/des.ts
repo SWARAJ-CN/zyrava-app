@@ -12,7 +12,7 @@ export function decryptMediaUrl(value: unknown): string {
   try {
     const key = CryptoJS.enc.Utf8.parse(JIOSAAVN_KEY);
     const decrypted = CryptoJS.DES.decrypt(
-      { ciphertext: CryptoJS.enc.Base64.parse(value) },
+      CryptoJS.lib.CipherParams.create({ ciphertext: CryptoJS.enc.Base64.parse(value) }),
       key,
       { mode: CryptoJS.mode.ECB, padding: CryptoJS.pad.Pkcs7 }
     );

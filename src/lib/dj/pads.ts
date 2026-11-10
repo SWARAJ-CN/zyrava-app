@@ -1,13 +1,3 @@
-/**
- * One-tap party pads — short sounds synthesized directly on the AudioContext,
- * so they fire with zero downloads. Every pad builds its own oscillator /
- * noise nodes, schedules envelopes, and lets them garbage-collect on stop.
- *
- * Ported from the web `lib/dj/pads.ts` unchanged in sound: the only shift is
- * the node types, which now come from react-native-audio-api's Web-Audio
- * compatible engine instead of the browser's.
- */
-
 import type { AudioBuffer, AudioContext, AudioNode, GainNode } from "react-native-audio-api";
 
 export const PADS = [

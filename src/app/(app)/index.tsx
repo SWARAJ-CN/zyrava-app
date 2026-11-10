@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { Pressable, ScrollView, Text, View, type ScrollViewInstance } from "react-native";
 import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { Image } from "expo-image";
 import { useLocalSearchParams } from "expo-router";
@@ -193,7 +193,7 @@ export default function MusicPage(): JSX.Element {
   const lastSearchRef = useRef<string | null>(null);
 
   /* ── Scroll plumbing (replaces scrollIntoView) ─────────────────────── */
-  const scrollRef = useRef<ScrollView>(null);
+  const scrollRef = useRef<ScrollViewInstance>(null);
   const anchors = useRef<Record<string, number>>({});
   const scrollToAnchor = useCallback((key: string) => {
     const y = anchors.current[key];
@@ -669,7 +669,12 @@ export default function MusicPage(): JSX.Element {
   const renderWave = (className: string, tone: "text-white" | "text-brand") => (
     <View className={cn("items-center justify-center p-1", className)}>
       {visualizerReady ? (
-        <Waveform getAnalyser={getAnalyser} active={playing} className="h-full w-full" tone={tone} />
+        <Waveform
+          getAnalyser={getAnalyser}
+          active={playing}
+          className="h-full w-full"
+          color={tone === "text-white" ? "#ffffff" : undefined}
+        />
       ) : (
         <EqBars tone={tone} />
       )}
