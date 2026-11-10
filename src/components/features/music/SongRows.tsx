@@ -48,13 +48,13 @@ function SaveRing({ value }: { value: number }) {
   const ring = 2 * Math.PI * radius;
   const share = Math.min(1, Math.max(0, value));
   return (
-    <Svg
-      width={20}
-      height={20}
-      viewBox="0 0 20 20"
-      accessibilityElementsHidden
-      style={{ transform: [{ rotate: "-90deg" }] }}
-    >
+    <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no">
+      <Svg
+        width={20}
+        height={20}
+        viewBox="0 0 20 20"
+        style={{ transform: [{ rotate: "-90deg" }] }}
+      >
       <Circle cx={10} cy={10} r={radius} fill="none" strokeWidth={2} stroke={separator} />
       <Circle
         cx={10}
@@ -67,7 +67,8 @@ function SaveRing({ value }: { value: number }) {
         strokeDasharray={`${ring}`}
         strokeDashoffset={ring * (1 - share)}
       />
-    </Svg>
+      </Svg>
+    </View>
   );
 }
 

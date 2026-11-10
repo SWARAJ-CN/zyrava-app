@@ -13,7 +13,7 @@
  * the resolved values are passed to the SVG's stroke/fill/width props instead.
  */
 import { type ReactNode } from "react";
-import { type StyleProp, type ViewStyle } from "react-native";
+import { type StyleProp, type ViewStyle, View } from "react-native";
 import { useButton, type ButtonVariant as HeroButtonVariant } from "heroui-native";
 import Svg, { Circle, Line, Path, Polygon, Polyline, Rect } from "react-native-svg";
 import { useCSSVariable } from "uniwind";
@@ -498,20 +498,24 @@ export function Icon({
   }
 
   return (
-    <Svg
-      width={resolvedSize}
-      height={resolvedSize}
-      viewBox="0 0 24 24"
-      fill={fillValue ?? "none"}
-      stroke={stroke}
-      strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
+    <View
+      pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no"
-      style={style}
+      style={[{ width: resolvedSize, height: resolvedSize }, style]}
     >
-      {ICONS[name]}
-    </Svg>
+      <Svg
+        width={resolvedSize}
+        height={resolvedSize}
+        viewBox="0 0 24 24"
+        fill={fillValue ?? "none"}
+        stroke={stroke}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {ICONS[name]}
+      </Svg>
+    </View>
   );
 }

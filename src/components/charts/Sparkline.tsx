@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { type StyleProp, type ViewStyle } from "react-native";
+import { type StyleProp, type ViewStyle, View } from "react-native";
 import Svg, { Defs, LinearGradient, Path, Stop } from "react-native-svg";
 import { useCSSVariable } from "uniwind";
 import { areaPath, smoothPath, type Point } from "./chart-utils";
@@ -82,15 +82,19 @@ export function Sparkline({
   };
 
   return (
-    <Svg
-      width={renderedWidth}
-      height={renderedHeight}
-      viewBox={`0 0 ${renderedWidth} ${renderedHeight}`}
-      preserveAspectRatio="none"
-      style={style}
+    <View
+      pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no"
+      style={{ width: renderedWidth, height: renderedHeight }}
     >
+      <Svg
+        width={renderedWidth}
+        height={renderedHeight}
+        viewBox={`0 0 ${renderedWidth} ${renderedHeight}`}
+        preserveAspectRatio="none"
+        style={style}
+      >
       <Defs>
         {/* Same vertical fade as the web SVG (objectBoundingBox units). */}
         <LinearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
@@ -107,6 +111,7 @@ export function Sparkline({
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-    </Svg>
+      </Svg>
+    </View>
   );
 }
