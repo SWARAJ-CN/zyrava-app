@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { View, AccessibilityInfo } from "react-native";
+import { Text, View, AccessibilityInfo } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import type { AnalyserNode } from "react-native-audio-api";
 import { cn } from "@/lib/cn";
@@ -128,19 +128,21 @@ export function BeatWordmark({
 
   /* The watermark layer stays exactly as faint as the web's [0.045] wash;
      the rgb layer's opacity mirrors `calc(0.08 + var(--fill) * 0.24)`, and
-     reduced motion pins it at the web's 0.12 still wash. */
+     reduced motion pins it at the web's 0.12 still wash. Both layers are
+     <Text> — a raw string cannot live inside a <View> on native, and the
+     sweeping hue must ride on the text itself (View colors don't cascade). */
   const glowStyle = useAnimatedStyle(() => ({
     opacity: reduced ? 0.12 : 0.08 + fill.value * 0.24,
     color: hsl(hue.value, 92, 60),
   }));
 
   return (
-    <View aria-hidden accessibilityElementsHidden className={cn("relative", className)}>
-      {/* grid stack: both layers share the box; the first one sizes it. */}
-      <View className="opacity-[0.045]">{children}</View>
-      <Animated.View className="absolute inset-0" style={glowStyle}>
+    <View aria-hidden accessibilityElementsHidden className="relative">
+      {/* stacked layers: both share the box; the base one sizes it. */}
+      <Text className={cn("opacity-[0.045]", className)}>{children}</Text>
+      <Animated.Text className={cn("absolute inset-0", className)} animatedStyle={glowStyle}>
         {children}
-      </Animated.View>
+      </Animated.Text>
     </View>
   );
 }
