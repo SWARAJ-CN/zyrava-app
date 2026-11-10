@@ -181,7 +181,6 @@ export default function MusicPage(): JSX.Element {
     appendQueue,
     setQueueEnd,
     repeat,
-    sidebarWide,
     setMobileNavOpen,
     shuffle,
     toggleShuffle,
@@ -1144,7 +1143,6 @@ export default function MusicPage(): JSX.Element {
                     <View className="flex-row flex-wrap gap-3 p-3">
                       {songs.map((song, songIndex) => {
                         const isActive = song.id === activeId;
-                        const cover = view === "large" ? 500 : 300;
                         const src = song.imageLarge || song.image;
                         return (
                           <View

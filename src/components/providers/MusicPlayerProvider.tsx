@@ -20,7 +20,6 @@ import {
   type AudioParam as RnAudioParam,
   type AudioBuffer as RnAudioBuffer,
   type BiquadFilterNode,
-  type ConvolverNode,
   type GainNode,
   type StereoPannerNode,
   type WaveShaperNode,
@@ -363,9 +362,6 @@ const PLAYBACK_RETRY_AFTER = [150, 700, 1800, 4000, 9000];
 
 /** Milliseconds between two watchdog checks of a playing track. */
 const WATCHDOG_EVERY = 6_000;
-
-/** How often the lock-screen notification re-reports position. */
-const NOTIFICATION_TICK_EVERY = 1_000;
 
 interface MusicPlayerValue {
   queue: Song[];
