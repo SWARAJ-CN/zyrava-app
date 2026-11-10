@@ -67,7 +67,12 @@ export default function RootLayout(): JSX.Element | null {
       prePaintTheme();
       // Inter becomes the app's typeface the moment fonts are in memory,
       // before the first Text renders — the web's global font-family.
-      applyGlobalFont();
+      // Belt-and-braces: typography must never be able to block boot.
+      try {
+        applyGlobalFont();
+      } catch {
+        /* system font fallback */
+      }
       setReady(true);
     });
   }, []);

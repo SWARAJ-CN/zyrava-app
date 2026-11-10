@@ -12,7 +12,6 @@
  * createElement for optimised components.
  */
 import { Platform, Text, TextInput } from "react-native";
-import * as React from "react";
 
 const FAMILY_BY_WEIGHT: Record<string, string> = {
   "100": "Inter_100Thin",
@@ -83,6 +82,30 @@ function familyFor(props: Record<string, unknown> | null | undefined): string | 
 
 let applied = false;
 
+/**
+ * Write helper: React 19 exposes its exports through getters on sealed
+ * namespace objects, so `React.createElement = …` throws. The underlying
+ * CommonJS `module.exports` objects are plain and writable — require them
+ * directly (Metro returns the live exports object) and mutate there. Every
+ * step is wrapped so a hostile runtime simply leaves the font unpatched;
+ * booting must never depend on this succeeding.
+ */
+function tryAssign(target: unknown, key: string, value: unknown): boolean {
+  try {
+    const holder = target as Record<string, unknown>;
+    if (Object.isFrozen(holder) || Object.isSealed(holder)) {
+      // A sealed/frozen namespace can't even be defineProperty'd — bail.
+      return false;
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(holder, key);
+    if (descriptor && !descriptor.configurable && !descriptor.writable) return false;
+    holder[key] = value;
+    return holder[key] === value;
+  } catch {
+    return false;
+  }
+}
+
 /** Patch the JSX factories. Call once, before any screen renders. */
 export function applyGlobalFont(): void {
   if (applied || Platform.OS === "web") return; // web resolves Inter via CSS
@@ -105,12 +128,9 @@ export function applyGlobalFont(): void {
       return (fn as (...args: unknown[]) => unknown).call(this, type, props, ...rest);
     };
 
-  const createElementOriginal = React.createElement as unknown as (
-    type: unknown,
-    props: unknown,
-    ...children: unknown[]
-  ) => unknown;
-  (React as unknown as Record<string, unknown>).createElement = wrap(createElementOriginal);
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const reactExports = require("react") as { createElement: unknown };
+  tryAssign(reactExports, "createElement", wrap(reactExports.createElement as never));
 
   // The compiled JSX runtime is what actually runs under reactCompiler.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -118,6 +138,6 @@ export function applyGlobalFont(): void {
     jsx: unknown;
     jsxs: unknown;
   };
-  jsxRuntime.jsx = wrap(jsxRuntime.jsx as (...args: unknown[]) => unknown);
-  jsxRuntime.jsxs = wrap(jsxRuntime.jsxs as (...args: unknown[]) => unknown);
+  tryAssign(jsxRuntime, "jsx", wrap(jsxRuntime.jsx as never));
+  tryAssign(jsxRuntime, "jsxs", wrap(jsxRuntime.jsxs as never));
 }
