@@ -36,6 +36,7 @@ const FOLLOW = 0.012;
 const DRIFT = 360 / 40_000;
 
 function hsl(h: number, s: number, l: number): string {
+  'worklet';
   const c = (1 - Math.abs((2 * l) / 100 - 1)) * (s / 100);
   const x = c * (1 - Math.abs((((((h % 360) + 360) % 360) / 60) % 2) - 1));
   const m = l / 100 - c / 2;

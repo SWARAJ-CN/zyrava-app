@@ -77,6 +77,7 @@ type Drift = { x: number; y: number; r: number };
 
 /** hsl → rgb for a Reanimated backgroundColor (0-360, %, %). */
 function hsl(h: number, s: number, l: number): string {
+  'worklet';
   const c = (1 - Math.abs((2 * l) / 100 - 1)) * (s / 100);
   const x = c * (1 - Math.abs((((((h % 360) + 360) % 360) / 60) % 2) - 1));
   const m = l / 100 - c / 2;
