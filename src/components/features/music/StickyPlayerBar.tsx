@@ -118,7 +118,7 @@ export function StickyPlayerBar() {
             : "text-muted active:bg-surface-secondary active:text-foreground"
         )}
       >
-        <Icon name="shuffle" className="size-4" />
+        <Icon name="shuffle" className={cn("size-4", shuffle ? "text-brand" : "text-muted")} />
       </Pressable>
       {/* Taste-driven queue top-ups: keeps the shelf below the needle growing
           from the listener's own taste. Never touches which track comes next. */}
@@ -135,7 +135,7 @@ export function StickyPlayerBar() {
             : "text-muted active:bg-surface-secondary active:text-foreground"
         )}
       >
-        <Icon name="sparkles" className="size-4" />
+        <Icon name="sparkles" className={cn("size-4", autoFeed ? "text-brand" : "text-muted")} />
       </Pressable>
       <Pressable
         accessibilityRole="button"
@@ -147,7 +147,7 @@ export function StickyPlayerBar() {
           "size-9 items-center justify-center rounded-full text-muted transition-colors duration-150 active:bg-surface-secondary active:text-foreground disabled:pointer-events-none disabled:opacity-35"
         )}
       >
-        <Icon name="skip-back" className="size-4 fill-current" />
+        <Icon name="skip-back" className="size-4 fill-current text-muted" />
       </Pressable>
       <Pressable
         accessibilityRole="button"
@@ -156,9 +156,9 @@ export function StickyPlayerBar() {
         className="size-11 items-center justify-center rounded-full bg-foreground text-background transition-transform duration-150 active:scale-95"
       >
         {playing ? (
-          <Icon name="pause" className="size-4 fill-current" />
+          <Icon name="pause" className="size-4 fill-current text-background" />
         ) : (
-          <Icon name="play" className="translate-x-px size-4 fill-current" />
+          <Icon name="play" className="translate-x-px size-4 fill-current text-background" />
         )}
       </Pressable>
       <Pressable
@@ -168,7 +168,7 @@ export function StickyPlayerBar() {
         hitSlop={4}
         className="size-9 items-center justify-center rounded-full text-muted transition-colors duration-150 active:bg-surface-secondary active:text-foreground"
       >
-        <Icon name="skip-forward" className="size-4 fill-current" />
+        <Icon name="skip-forward" className="size-4 fill-current text-muted" />
       </Pressable>
       <Pressable
         accessibilityRole="button"
@@ -183,9 +183,9 @@ export function StickyPlayerBar() {
             : "text-muted active:bg-surface-secondary active:text-foreground"
         )}
       >
-        <Icon name="repeat" className="size-4" />
+        <Icon name="repeat" className={cn("size-4", repeat !== "off" ? "text-brand" : "text-muted")} />
         {repeat !== "off" ? (
-          <Text className="absolute bottom-0.5 left-1/2 -translate-x-1/2 font-mono text-[7px] font-black uppercase tracking-widest">
+          <Text className="absolute bottom-0.5 left-1/2 -translate-x-1/2 font-mono text-[7px] font-black uppercase tracking-widest text-brand">
             {repeat === "all" ? "all" : "1"}
           </Text>
         ) : null}
@@ -377,7 +377,7 @@ export function StickyPlayerBar() {
                     />
                   ) : (
                     <View className="h-full items-center justify-center text-faint-foreground">
-                      <Icon name="music" className="size-5" />
+                      <Icon name="music" className="size-5 text-faint-foreground" />
                     </View>
                   )}
                   {playing ? renderWave("absolute inset-0", "text-white") : null}
@@ -426,7 +426,7 @@ export function StickyPlayerBar() {
                 onPress={() => openPicker(current)}
                 className="size-9 flex-none items-center justify-center rounded-full text-muted"
               >
-                <Icon name="plus" className="size-4" />
+                <Icon name="plus" className="size-4 text-muted" />
               </Pressable>
               <Pressable
                 accessibilityRole="button"
@@ -440,7 +440,7 @@ export function StickyPlayerBar() {
                     : "border-separator text-muted"
                 )}
               >
-                <Icon name="sidebar" className="size-4" />
+                <Icon name="sidebar" className={cn("size-4", nowPlayingOpen ? "text-brand" : "text-muted")} />
               </Pressable>
               <Pressable
                 accessibilityRole="button"
@@ -471,9 +471,9 @@ export function StickyPlayerBar() {
                 className="size-9 flex-none items-center justify-center rounded-full text-muted"
               >
                 {muted ? (
-                  <Icon name="volume-x" className="size-4" />
+                  <Icon name="volume-x" className="size-4 text-muted" />
                 ) : (
-                  <Icon name="volume-2" className="size-4" />
+                  <Icon name="volume-2" className="size-4 text-muted" />
                 )}
               </Pressable>
               <Slider

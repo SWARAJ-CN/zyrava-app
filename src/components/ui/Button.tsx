@@ -5,6 +5,8 @@ import {
   type ComponentRef,
   type ReactNode,
 } from "react";
+import { cloneElement, isValidElement, type ReactElement } from "react";
+import { Text } from "react-native";
 import { Link, type LinkProps } from "expo-router";
 import Animated, {
   cancelAnimation,
@@ -23,6 +25,7 @@ import {
   type ThemeColor,
 } from "heroui-native";
 import { cn } from "@/lib/cn";
+import { Icon } from "./icons";
 
 export type ButtonVariant = "primary" | "secondary" | "outline" | "ghost" | "danger";
 export type ButtonSize = "sm" | "md" | "lg" | "icon";
@@ -163,14 +166,61 @@ export const Button = forwardRef<ComponentRef<typeof HeroButton>, ButtonProps>(f
       {...props}
     >
       {loading ? <LoadingGlyph color={labelColor} /> : null}
-      {typeof children === "string" ? (
-        <HeroButton.Label className={labelClassName}>{children}</HeroButton.Label>
-      ) : (
-        children
-      )}
+      {renderChildren(children, labelColor, labelClassName)}
     </HeroButton>
   );
 });
+
+/**
+ * Web parity: the browser Button puts every child inside the label span, so
+ * `primary`/`danger` buttons mixing an <Icon/> with text render in the
+ * variant's label colour. Natively the children must be composed: strings
+ * become coloured <Text>, icons without their own tint inherit the label
+ * colour, and a lone string keeps the real HeroUI Label styling.
+ */
+function renderChildren(children: ReactNode, color: string, labelClassName?: string): ReactNode {
+  if (typeof children === "string" || typeof children === "number") {
+    return (
+      <HeroButton.Label className={labelClassName}>{children}</HeroButton.Label>
+    );
+  }
+  const nodes = Array.isArray(children) ? children : [children];
+  const elements = nodes.filter((node) => isValidElement(node));
+  const textNodes = nodes.filter((node) => typeof node === "string" || typeof node === "number");
+  if (!elements.length) {
+    // Pure text (possibly fragmented) — one Label keeps web typography.
+    return (
+      <HeroButton.Label className={labelClassName}>{children}</HeroButton.Label>
+    );
+  }
+  return (
+    <>
+      {nodes.map((node, index) => {
+        if (typeof node === "string" || typeof node === "number") {
+          return (
+            <Text
+              key={index}
+              className={cn("text-[13px] font-semibold", labelClassName)}
+              style={{ color }}
+            >
+              {String(node)}
+            </Text>
+          );
+        }
+        const element = node as ReactElement<{ className?: string; color?: string }>;
+        if (
+          element.type === Icon &&
+          element.props.color === undefined &&
+          !/(?:^|\s)text-/.test(element.props.className ?? "")
+        ) {
+          // inherit the variant's label colour (web currentColor parity)
+          return cloneElement(element, { color });
+        }
+        return element;
+      })}
+    </>
+  );
+}
 
 export interface ButtonLinkProps extends Omit<LinkProps, "className"> {
   variant?: ButtonVariant;

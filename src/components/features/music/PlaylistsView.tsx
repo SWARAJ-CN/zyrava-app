@@ -239,7 +239,7 @@ export function PlaylistsView({ query }: { query: string }) {
                       pointerEvents="none"
                       className="absolute bottom-2 right-2 size-10 translate-y-2 items-center justify-center rounded-full bg-accent text-accent-foreground opacity-0 shadow-pop"
                     >
-                      <Icon name="play" size={15} className="fill-current" />
+                      <Icon name="play" size={15} className="fill-current text-accent-foreground" />
                     </View>
                   </View>
                   <Text
@@ -368,7 +368,7 @@ export function PlaylistsView({ query }: { query: string }) {
               accessibilityLabel="Close playlist"
               className="absolute right-3 top-3 z-10 size-9 items-center justify-center rounded-full text-muted active:bg-surface-secondary active:text-foreground"
             >
-              <Icon name="x" className="size-4" />
+              <Icon name="x" className="size-4 text-muted" />
             </Pressable>
 
             <CollectionHero
@@ -392,7 +392,7 @@ export function PlaylistsView({ query }: { query: string }) {
                   onClick={() => startQueue(detail.songs, detail.title, 0)}
                   label="Play playlist"
                 >
-                  <Icon name="play" size={18} className="fill-current" />
+                  <Icon name="play" size={18} className="fill-current text-accent-foreground" />
                 </RoundPlay>
               ) : null}
             </CollectionHero>

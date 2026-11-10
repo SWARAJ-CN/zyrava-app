@@ -71,7 +71,7 @@ export function LikedView() {
         } · saved to your account`}
       >
         <RoundPlay onClick={playAll} disabled={!liked.length} label="Play all liked songs">
-          <Icon name="play" size={18} className="fill-current" />
+          <Icon name="play" size={18} className="fill-current text-accent-foreground" />
         </RoundPlay>
         <OutlineAction
           onClick={shufflePlay}

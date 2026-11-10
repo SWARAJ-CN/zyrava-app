@@ -57,7 +57,7 @@ export function NowPlayingPanel() {
           accessibilityLabel="Close now playing panel"
           className="size-8 flex-none items-center justify-center rounded-full text-muted active:bg-surface-secondary active:text-foreground"
         >
-          <Icon name="x" className="size-4" />
+          <Icon name="x" className="size-4 text-muted" />
         </Pressable>
       </View>
 
@@ -85,7 +85,7 @@ export function NowPlayingPanel() {
             />
           ) : (
             <View className="h-full items-center justify-center text-faint-foreground">
-              <Icon name="music" className="size-10" />
+              <Icon name="music" className="size-10 text-faint-foreground" />
             </View>
           )}
           {playing ? (
@@ -156,7 +156,7 @@ export function NowPlayingPanel() {
               accessibilityLabel={playing ? "Pause" : "Play"}
               className="size-10 items-center justify-center rounded-full bg-accent text-accent-foreground transition-transform duration-150 active:scale-95"
             >
-              <Icon name={playing ? "pause" : "play"} size={18} className="fill-current" />
+              <Icon name={playing ? "pause" : "play"} size={18} className="fill-current text-accent-foreground" />
             </Pressable>
             <Text
               numberOfLines={1}
