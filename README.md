@@ -55,10 +55,11 @@ npx expo run:android        # or: npx expo run:ios
 src/app            expo-router screens (root _layout = web app/layout.tsx provider tree)
   (auth)/login|register    ↔  app/login, app/register
   (app)/index              ↔  app/page.tsx (browse feed + tabs)
-  (app)/now-playing        ↔  NowPlayingPanel (phone: full-screen modal)
-  (app)/console            ↔  MixerConsole
-  (app)/chat               ↔  ChatPanel
-  (app)/dock               ↔  SideBar (phone: drawer)
+  (app)/_layout            mounts AppChrome once — the web's shell pattern:
+    SideBar (dock drawer, mobileNavOpen) · MixerConsole (mixerOpen) ·
+    ChatPanel (chatOpen) · NowPlayingPanel (nowPlayingOpen) ·
+    StickyPlayerBar (queue active) — each hides itself until its flag flips,
+    so the single <Audio> element and chrome persist through all navigation.
 src/components     ↔  components/ (ui, auth, providers, features/*)
 src/lib            ↔  lib/ (saavn, taste, related, lyrics, lrclib, community,
                      socket, history, library, offline→files, i18n/, …)
