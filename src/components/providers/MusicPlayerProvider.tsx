@@ -9,22 +9,19 @@ import {
   type ReactNode,
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
-import {
-  Audio,
+import type {
   AudioContext,
-  AudioManager,
-  PlaybackNotificationManager,
-  useAudioTagContext,
-  type AudioTagHandle,
-  type AudioNode as RnAudioNode,
-  type AudioParam as RnAudioParam,
-  type AudioBuffer as RnAudioBuffer,
-  type BiquadFilterNode,
-  type GainNode,
-  type StereoPannerNode,
-  type WaveShaperNode,
-  type AnalyserNode as RnAnalyserNode,
+  AudioTagHandle,
+  AudioNode as RnAudioNode,
+  AudioParam as RnAudioParam,
+  AudioBuffer as RnAudioBuffer,
+  BiquadFilterNode,
+  GainNode,
+  StereoPannerNode,
+  WaveShaperNode,
+  AnalyserNode as RnAnalyserNode,
 } from "react-native-audio-api";
+import { getAudioEngine, NO_ENGINE_MESSAGE } from "@/lib/audio-engine";
 import type { Song } from "@/lib/saavn";
 import { searchSongs } from "@/lib/saavn";
 import { playbackKind, buildRadioFor, type FetchPool } from "@/lib/taste";
@@ -34,6 +31,16 @@ import { useGuestLock } from "@/components/providers/GuestLockProvider";
 import { playPad as firePad, type PadName } from "@/lib/dj/pads";
 import { onAudioInterruption, deactivateAudioSession } from "@/lib/wake-info";
 import { getItem, setItem } from "@/lib/store";
+
+/*
+ * The engine loads through the lazy shim (see audio-engine.ts): in a binary
+ * without react-native-audio-api — Expo Go — `engine` is simply null. The
+ * app still boots, browses, chats and reads lyrics; playback degrades to a
+ * clear message instead of a crash wall at import time.
+ */
+const engine = getAudioEngine();
+const AudioTagComponent = engine?.Audio ?? null;
+const notify = engine?.PlaybackNotificationManager ?? null;
 
 /* ------------------------------------------------------------------ *
  * Native port of the web MusicPlayerProvider.
@@ -475,8 +482,8 @@ const MusicPlayerContext = createContext<MusicPlayerValue | null>(null);
  * ever remounted.
  */
 let sharedContext: AudioContext | null = null;
-function acquireContext(): AudioContext {
-  if (!sharedContext) sharedContext = new AudioContext();
+function acquireContext(): AudioContext | null {
+  if (!sharedContext && engine) sharedContext = new engine.AudioContext();
   return sharedContext;
 }
 function releaseContext(): void {
@@ -492,10 +499,11 @@ function AudioMetaBridge({
 }: {
   onMeta: (duration: number, ready: boolean) => void;
 }): null {
-  const { duration, ready } = useAudioTagContext();
+  // Only ever mounted inside <Audio>, which only exists when the engine does.
+  const tag = engine?.useAudioTagContext();
   useEffect(() => {
-    onMeta(duration, ready);
-  }, [duration, ready, onMeta]);
+    if (tag) onMeta(tag.duration, tag.ready);
+  }, [tag, onMeta]);
   return null;
 }
 
@@ -613,7 +621,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   /** The one graph context — native audio has no gesture gate, so it is
    *  created at mount (the web built it lazily only for CORS reasons). */
-  const [context] = useState<AudioContext>(acquireContext);
+  const [context] = useState<AudioContext | null>(acquireContext);
 
   const analyserRef = useRef<RnAnalyserNode | null>(null);
   const filtersRef = useRef<BiquadFilterNode[]>([]);
@@ -1466,12 +1474,12 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
      wired yet — the media element only mounts once a track is armed (see the
      source effect), keeping `<Audio>` away from an empty src. */
   useEffect(() => {
-    void AudioManager.setAudioSessionActivity(true).catch(() => undefined);
-    AudioManager.observeAudioInterruptions(true);
+    void engine?.AudioManager.setAudioSessionActivity(true).catch(() => undefined);
+    engine?.AudioManager.observeAudioInterruptions(true);
     /* Android 13+ needs POST_NOTIFICATIONS before the foreground-service
        notification (the thing that keeps playback alive when the app is
        swiped away) can be shown. */
-    void AudioManager.requestNotificationPermissions().catch(() => undefined);
+    void engine?.AudioManager.requestNotificationPermissions().catch(() => undefined);
     return () => {
       spatialCleanupRef.current();
     };
@@ -1502,7 +1510,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       recoveryRef.current = null;
       const handle = audioRef.current;
       if (!handle || !shouldPlayRef.current || userPausedRef.current) return;
-      void context.resume().catch(() => undefined);
+      void context?.resume().catch(() => undefined);
       if (!pausedRef.current) {
         attemptsRef.current = 0;
         return;
@@ -1560,7 +1568,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     const sub = AppState.addEventListener("change", (state) => {
       visibilityRef.current = state;
       if (state === "active") {
-        void context.resume().catch(() => undefined);
+        void context?.resume().catch(() => undefined);
         recoverPlayback();
       }
     });
@@ -1860,7 +1868,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
       // Keep the OS session warm with a fresh position (setPositionState).
       if (track && dur && Number.isFinite(dur) && notificationShownRef.current) {
-        void PlaybackNotificationManager.show({
+        void notify?.show({
           title: track.title,
           artist: track.artist,
           album: track.album || undefined,
@@ -1909,7 +1917,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!current) {
       if (notificationShownRef.current) {
-        void PlaybackNotificationManager.hide().catch(() => undefined);
+        void notify?.hide().catch(() => undefined);
         notificationShownRef.current = false;
       }
       return;
@@ -1924,14 +1932,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       state: playing ? ("playing" as const) : ("paused" as const),
       skipInterval: 10,
     };
-    void PlaybackNotificationManager.show(info).then(() => {
+    void notify?.show(info).then(() => {
       notificationShownRef.current = true;
     });
-    void PlaybackNotificationManager.enableControl("nextTrack", true).catch(() => undefined);
-    void PlaybackNotificationManager.enableControl("previousTrack", true).catch(() => undefined);
-    void PlaybackNotificationManager.enableControl("seekTo", true).catch(() => undefined);
-    void PlaybackNotificationManager.enableControl("skipForward", true).catch(() => undefined);
-    void PlaybackNotificationManager.enableControl("skipBackward", true).catch(() => undefined);
+    void notify?.enableControl("nextTrack", true).catch(() => undefined);
+    void notify?.enableControl("previousTrack", true).catch(() => undefined);
+    void notify?.enableControl("seekTo", true).catch(() => undefined);
+    void notify?.enableControl("skipForward", true).catch(() => undefined);
+    void notify?.enableControl("skipBackward", true).catch(() => undefined);
     return () => {
       // Handlers live for the whole provider; metadata updates on change.
     };
@@ -1945,29 +1953,30 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     seek: (seconds: number) => void;
   } | null>(null);
   useEffect(() => {
+    if (!notify) return;
     const subs = [
-      PlaybackNotificationManager.addEventListener("playbackNotificationPlay", () =>
+      notify.addEventListener("playbackNotificationPlay", () =>
         transportRef.current?.togglePlay()
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationPause", () =>
+      notify.addEventListener("playbackNotificationPause", () =>
         transportRef.current?.togglePlay()
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationNextTrack", () =>
+      notify.addEventListener("playbackNotificationNextTrack", () =>
         transportRef.current?.stepTrack(1)
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationPreviousTrack", () =>
+      notify.addEventListener("playbackNotificationPreviousTrack", () =>
         transportRef.current?.stepTrack(-1)
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationStop", () =>
+      notify.addEventListener("playbackNotificationStop", () =>
         transportRef.current?.stop()
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationSkipBackward", (event) =>
+      notify.addEventListener("playbackNotificationSkipBackward", (event) =>
         transportRef.current?.seek(Math.max(0, positionRef.current - (event.value ?? 10)))
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationSkipForward", (event) =>
+      notify.addEventListener("playbackNotificationSkipForward", (event) =>
         transportRef.current?.seek(positionRef.current + (event.value ?? 10))
       ),
-      PlaybackNotificationManager.addEventListener("playbackNotificationSeekTo", (event) => {
+      notify.addEventListener("playbackNotificationSeekTo", (event) => {
         if (typeof event.value === "number") transportRef.current?.seek(event.value);
       }),
     ];
@@ -1984,9 +1993,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       }
       // Drop the lock-screen/foreground-service notification and hand the
       // OS audio session back, so no stale media notification outlives us.
-      void PlaybackNotificationManager.hide().catch(() => undefined);
+      void notify?.hide().catch(() => undefined);
       void deactivateAudioSession();
-      void context.close().catch(() => undefined);
+      void context?.close().catch(() => undefined);
       releaseContext();
       analyserRef.current = null;
       mediaSourceRef.current = null;
@@ -2002,7 +2011,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       userPausedRef.current = false;
       endedRef.current = false;
       clearRecovery();
-      void context.resume().catch(() => undefined);
+      void context?.resume().catch(() => undefined);
       handle.play();
     } else {
       userPausedRef.current = true;
@@ -2013,6 +2022,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   const startQueue = useCallback(
     (list: Song[], label: string, position: number) => {
+      if (!engine) {
+        // Expo Go / engine-less binary: say so plainly, stay functional.
+        setPlayerError(NO_ENGINE_MESSAGE);
+        return;
+      }
       /* A trial run is ten tracks long no matter which surface started it. */
       const run = isGuest ? list.slice(0, GUEST_PLAY_LIMIT) : list;
       const track = run[Math.min(position, run.length - 1)];
@@ -2570,11 +2584,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
           the graph tap are re-attached together in the source effect. The
           meta bridge lives inside the tag so it can read duration/ready. */}
       {children}
-      {source ? (
-        <Audio
+      {AudioTagComponent && source ? (
+        <AudioTagComponent
           ref={audioRef}
           source={source}
-          context={context}
+          context={context ?? undefined}
           preload="auto"
           autoPlay={false}
           loop={false}
@@ -2598,7 +2612,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
           onError={handleError}
         >
           <AudioMetaBridge onMeta={handleAudioMeta} />
-        </Audio>
+        </AudioTagComponent>
       ) : null}
     </MusicPlayerContext.Provider>
   );

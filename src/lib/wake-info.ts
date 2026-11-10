@@ -10,8 +10,11 @@
  * calls, so the whole wrapper stays deliberately tiny.
  */
 
-import { AudioManager } from "react-native-audio-api";
+import { getAudioEngine } from "./audio-engine";
 import type { AudioEventSubscription } from "react-native-audio-api";
+
+const engine = getAudioEngine();
+const AudioManager = engine?.AudioManager;
 
 export interface AudioInterruption {
   /** `began` when the system took the session, `ended` when it gave it back. */
@@ -25,7 +28,7 @@ export type AudioInterruptionListener = (interruption: AudioInterruption) => voi
 /** Activates the app's audio session so playback survives the screen lock. */
 export async function activateAudioSession(): Promise<boolean> {
   try {
-    await AudioManager.setAudioSessionActivity(true);
+    await AudioManager?.setAudioSessionActivity(true);
     return true;
   } catch {
     /* a session the system will not hand over — the caller plays regardless */
@@ -36,7 +39,7 @@ export async function activateAudioSession(): Promise<boolean> {
 /** Releases it again once playback ends, so other apps get their audio back. */
 export async function deactivateAudioSession(): Promise<boolean> {
   try {
-    await AudioManager.setAudioSessionActivity(false);
+    await AudioManager?.setAudioSessionActivity(false);
     return true;
   } catch {
     return false;
@@ -49,6 +52,7 @@ let subscription: AudioEventSubscription | null = null;
 /** Media-style focus: duck or pause for calls and other apps, recover after. */
 function startObserving(): void {
   if (subscription) return;
+  if (!AudioManager) return;
   AudioManager.observeAudioInterruptions("gain");
   subscription = AudioManager.addSystemEventListener("interruption", (event) => {
     for (const listener of [...listeners]) listener(event);
@@ -59,7 +63,7 @@ function stopObserving(): void {
   if (listeners.size > 0 || !subscription) return;
   subscription.remove();
   subscription = null;
-  AudioManager.observeAudioInterruptions(null);
+  AudioManager?.observeAudioInterruptions(null);
 }
 
 /**

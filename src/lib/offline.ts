@@ -19,10 +19,11 @@
 import * as Crypto from "expo-crypto";
 import { Directory, File, Paths } from "expo-file-system";
 import type { DocumentPickerAsset, DocumentPickerResult } from "expo-document-picker";
-import { AudioContext, getAudioDuration } from "react-native-audio-api";
-
+import { getAudioEngine } from "./audio-engine";
 import { readJson, writeJson } from "./store";
 import type { OfflineSource, Song } from "./saavn";
+
+const audioEngine = getAudioEngine();
 
 export type OfflineKind = OfflineSource;
 
@@ -341,13 +342,14 @@ export async function readDuration(
 
   const probe: Promise<number> = (async () => {
     try {
-      const duration = await getAudioDuration(input);
+      const duration = await (audioEngine?.getAudioDuration ?? (async () => Number.NaN))(input);
       if (Number.isFinite(duration) && duration > 0) return Math.round(duration);
     } catch {
       /* fall through to the decoder */
     }
     try {
-      const context = new AudioContext();
+      if (!audioEngine) return 0;
+      const context = new audioEngine.AudioContext();
       try {
         const buffer = await context.decodeAudioData(input);
         return Number.isFinite(buffer.duration) ? Math.round(buffer.duration) : 0;
