@@ -4,13 +4,14 @@ import { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { useFonts, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_900Black } from "@expo-google-fonts/inter";
+import { useFonts, Inter_100Thin, Inter_200ExtraLight, Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold, Inter_900Black } from "@expo-google-fonts/inter";
 import * as SplashScreen from "expo-splash-screen";
 import { Uniwind } from "uniwind";
 import { HeroUINativeProvider } from "heroui-native";
 import { Stack } from "expo-router";
 import { Appearance } from "react-native";
 
+import { applyGlobalFont } from "@/lib/global-font";
 import "../global.css";
 import { hydrateStorage, getItem } from "@/lib/store";
 import { readRequestLocale } from "@/lib/i18n/server";
@@ -49,10 +50,14 @@ function ThemedStatusBar(): JSX.Element {
 
 export default function RootLayout(): JSX.Element | null {
   const [fontsLoaded] = useFonts({
+    Inter_100Thin,
+    Inter_200ExtraLight,
+    Inter_300Light,
     Inter_400Regular,
     Inter_500Medium,
     Inter_600SemiBold,
     Inter_700Bold,
+    Inter_800ExtraBold,
     Inter_900Black,
   });
   const [ready, setReady] = useState(false);
@@ -60,6 +65,9 @@ export default function RootLayout(): JSX.Element | null {
   useEffect(() => {
     void hydrateStorage().then(() => {
       prePaintTheme();
+      // Inter becomes the app's typeface the moment fonts are in memory,
+      // before the first Text renders — the web's global font-family.
+      applyGlobalFont();
       setReady(true);
     });
   }, []);
@@ -78,7 +86,13 @@ export default function RootLayout(): JSX.Element | null {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <HeroUINativeProvider>
+        <HeroUINativeProvider
+          config={{
+            /* The web raises bottom toast regions above the player bar
+               (--toast-clearance); insets do the same natively. */
+            toast: { insets: { bottom: 96 } },
+          }}
+        >
           <I18nProvider initialLocale={initialLocale}>
             <PwaProvider>
               <VisitBeacon />

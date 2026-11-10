@@ -2,18 +2,32 @@
 @import "uniwind";
 
 @import "heroui-native/styles";
-@source "../node_modules/heroui-native/lib";
+
+/* End-user path: heroui-native lives in the project's node_modules, one
+   level up from this src/global.css file. */
+@source '../node_modules/heroui-native/lib';
 
 /* ------------------------------------------------------------------ *
- * ZYRAVA token bridge — mirrors the web app/globals.css @theme inline
- * block, mapped onto the same HeroUI v3 semantic variables that
- * heroui-native ships (background/surface/overlay/accent/…).
+ * ZYRAVA design layer — a faithful port of the web app's globals.css.
+ *
+ * Structure mirrors the browser build 1:1: the @theme inline bridge for
+ * utility names, the raw :root alias block, the layout tokens, and the
+ * accent identity per scheme. Only two platform adjustments: values that
+ * the native colour resolver cannot evaluate lazily are written per
+ * light/dark scope, and the font stack carries the RN-registered Inter
+ * weight families (see src/lib/global-font.ts).
  * ------------------------------------------------------------------ */
 @theme inline {
   /* Surfaces */
   --color-surface-muted: var(--surface-secondary);
   --color-surface-inset: var(--surface-secondary);
   --color-surface-strong: var(--surface-tertiary);
+
+  /* Left dock — see the token block in :root */
+  --color-dock: var(--dock-bg);
+  --color-dock-hover: var(--dock-hover);
+  --color-dock-active: var(--dock-active);
+  --color-dock-line: var(--dock-line);
 
   /* Text */
   --color-muted-foreground: var(--muted);
@@ -38,9 +52,8 @@
   --color-danger-soft: var(--danger-soft);
   --color-danger-soft-foreground: var(--danger-soft-foreground);
 
-  /* Info (HeroUI has no info hue) — `light-dark()` is a browser-only
-     function the native resolver cannot evaluate; the hue is registered
-     per scheme below instead (web globals.css parity). */
+  /* Info (HeroUI has no info hue) — per-scheme value in the :root block
+     below; light-dark() is browser-only. */
   --color-info: var(--info);
   --color-info-soft: color-mix(in oklab, var(--color-info) 15%, transparent);
   --color-info-soft-foreground: color-mix(in oklab, var(--color-info) 72%, var(--foreground) 28%);
@@ -52,100 +65,85 @@
   --color-chart-4: oklch(0.66 0.14 158);
   --color-chart-5: oklch(0.62 0.17 300);
   --color-chart-6: oklch(0.7 0.12 205);
-  --color-chart-7: oklch(0.68 0.13 20);
-  --color-chart-8: oklch(0.6 0.12 120);
+  --color-chart-7: oklch(0.66 0.17 340);
+  --color-chart-8: oklch(0.7 0.13 130);
 
-  /* Player chrome */
-  --color-bar: oklch(0.21 0.012 300);
-  --color-bar-edge: oklch(1 0 0 / 10%);
+  /* Slightly softer corners than HeroUI's default — the web's radius. */
+  --radius: 0.625rem;
 }
 
-/* Accent identity from the web app — the emerald/teal brand. */
 :root {
-  @variant light {
-    --accent: oklch(0.62 0.13 175);
-    --background: #ffffff;
-    --info: oklch(0.55 0.16 255);
-  }
+  /* Raw tokens referenced directly by charts and inline styles — same names
+     the web sheets use, so useCSSVariable("var(--brand)") resolves here too. */
+  --brand: var(--accent);
+  --brand-hover: var(--accent-hover);
+  --brand-foreground: var(--accent-foreground);
+  --brand-soft: var(--accent-soft);
+  --surface-muted: var(--surface-secondary);
+  --border-strong: var(--border-tertiary);
+  --faint-foreground: color-mix(in oklab, var(--muted) 74%, transparent);
 
-  @variant dark {
-    --accent: oklch(0.78 0.13 170);
-    --background: #17111c;
-    --info: oklch(0.71 0.14 255);
-  }
+  --chart-1: oklch(0.64 0.2 6);
+  --chart-2: oklch(0.62 0.15 255);
+  --chart-3: oklch(0.75 0.15 75);
+  --chart-4: oklch(0.66 0.14 158);
+  --chart-5: oklch(0.62 0.17 300);
+  --chart-6: oklch(0.7 0.12 205);
+  --chart-7: oklch(0.66 0.17 340);
+  --chart-8: oklch(0.7 0.13 130);
+
+  /* Layout */
+  --dock-rail: 4.5rem;
+  --dock-wide: 17.5rem;
+  --header-height: 4rem;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+
+  /* Shadows mapped to HeroUI tokens */
+  --shadow-card: var(--surface-shadow);
+  --shadow-pop: var(--overlay-shadow);
 }
 
-/* ------------------------------------------------------------------ *
- * Hover/press tokens — the library defines these with color-mix over
- * var chains; hero's Button resolves them through the runtime and
- * feeds the result to its colorKit, which ONLY understands
- * hex/rgb/hsl/hwb — never oklch or raw color-mix. Mirrored here as
- * pre-computed hex/rgba literals of the same formulas (90/10 hover,
- * 96/4 default, 20% soft), evaluated per scheme, so the conversion
- * can never meet a value it cannot parse.
- * ------------------------------------------------------------------ */
 @layer theme {
   :root {
     @variant light {
-      --color-accent-hover: #3fa58c;
-      --color-default-hover: #e8e8ea;
-      --color-danger-hover: #db4c4c;
-      --color-success-hover: #3fbc82;
-      --color-warning-hover: #dda838;
-      --color-default-soft-hover: rgba(241, 240, 241, 0.6);
-      --color-accent-soft-hover: rgba(65, 159, 139, 0.2);
-      --color-danger-soft-hover: rgba(217, 60, 60, 0.2);
-      --color-warning-soft-hover: rgba(221, 168, 56, 0.2);
-      --color-success-soft-hover: rgba(62, 189, 130, 0.2);
+      /* The web's studio teal */
+      --accent: oklch(0.62 0.13 175);
+      --accent-hover: oklch(0.68 0.13 175);
+      --accent-foreground: oklch(0.98 0.01 170);
+      --accent-soft: color-mix(in oklab, var(--accent) 14%, transparent);
+      --accent-soft-foreground: oklch(0.38 0.09 175);
+
+      --background: #ffffff;
+      --info: oklch(0.55 0.16 255);
+
+      /* Left dock: one surface slightly lifted from the page */
+      --dock-bg: color-mix(in oklch, var(--surface-secondary) 68%, var(--background));
+      --dock-hover: color-mix(in oklch, var(--foreground) 5%, transparent);
+      --dock-active: color-mix(in oklch, var(--accent) 13%, transparent);
+      --dock-line: color-mix(in oklch, var(--foreground) 8%, transparent);
     }
 
     @variant dark {
-      --color-accent-hover: #6ecfb8;
-      --color-default-hover: #43424a;
-      --color-danger-hover: #db4c4c;
-      --color-success-hover: #3fbc82;
-      --color-warning-hover: #dda838;
-      --color-default-soft-hover: rgba(63, 62, 70, 0.6);
-      --color-accent-soft-hover: rgba(98, 199, 174, 0.2);
-      --color-danger-soft-hover: rgba(217, 60, 60, 0.2);
-      --color-warning-soft-hover: rgba(221, 168, 56, 0.2);
-      --color-success-soft-hover: rgba(62, 189, 130, 0.2);
+      /* Night mode lifts the value for contrast on dark surfaces. */
+      --accent: oklch(0.78 0.13 170);
+      --accent-hover: oklch(0.84 0.12 168);
+      /* The web's dark ink-on-teal — buttons read dark text on bright teal. */
+      --accent-foreground: oklch(0.25 0.04 172);
+      --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
+      --accent-soft-foreground: var(--accent);
+
+      --background: #17111c;
+      --info: oklch(0.71 0.14 255);
+
+      --dock-bg: color-mix(in oklch, var(--surface-secondary) 68%, var(--background));
+      --dock-hover: color-mix(in oklch, var(--foreground) 5%, transparent);
+      --dock-active: color-mix(in oklch, var(--accent) 13%, transparent);
+      --dock-line: color-mix(in oklch, var(--foreground) 8%, transparent);
     }
   }
-}
-
-/* ------------------------------------------------------------------ *
- * Dock + shadow tokens — the web defines these with color-mix over
- * theme vars; Uniwind needs concrete per-scheme values, so each line
- * below is the web formula evaluated against the HeroUI palette.
- *   --dock-bg    = surface-secondary 68% + background
- *   --dock-hover = foreground 5% / transparent
- *   --dock-active= accent 13% / transparent
- *   --dock-line  = foreground 8% / transparent
- * ------------------------------------------------------------------ */
-@layer theme {
-  :root {
-    @variant light {
-      --dock-bg: #f8f7fa;
-      --dock-hover: rgba(33, 32, 37, 0.05);
-      --dock-active: rgba(89, 166, 149, 0.13);
-      --dock-line: rgba(33, 32, 37, 0.08);
-    }
-
-    @variant dark {
-      --dock-bg: #1d1723;
-      --dock-hover: rgba(248, 249, 250, 0.05);
-      --dock-active: rgba(130, 203, 180, 0.13);
-      --dock-line: rgba(248, 249, 250, 0.08);
-    }
-  }
-}
-
-@theme inline {
-  --color-dock: var(--dock-bg);
-  --color-dock-hover: var(--dock-hover);
-  --color-dock-active: var(--dock-active);
-  --color-dock-line: var(--dock-line);
 }
 
 @utility shadow-field {
@@ -162,3 +160,9 @@
     0 14px 28px rgba(0, 0, 0, 0.03);
 }
 
+@utility shadow-card {
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06);
+}
