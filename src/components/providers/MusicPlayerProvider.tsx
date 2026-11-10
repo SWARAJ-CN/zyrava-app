@@ -1485,7 +1485,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     mediaSourceRef.current = null;
     elementRef.current = null;
     analyserRef.current = null;
-    setVisualizerReady(false);
+    // visualizerReady flips back on with the next onLoad wiring; readers of
+    // getAnalyser() already idle-drift on null, like the web's fallback.
   }, [source]);
 
   /* Native media session on for the whole app. The graph itself cannot be
