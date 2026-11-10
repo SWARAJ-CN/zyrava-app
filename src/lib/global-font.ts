@@ -11,7 +11,7 @@
  * `font-*` classes, since React Compiler emits jsx() rather than
  * createElement for optimised components.
  */
-import { Platform, Text, TextInput } from "react-native";
+import { Platform, StyleSheet, Text, TextInput } from "react-native";
 
 const FAMILY_BY_WEIGHT: Record<string, string> = {
   "100": "Inter_100Thin",
@@ -80,6 +80,23 @@ function familyFor(props: Record<string, unknown> | null | undefined): string | 
   return FAMILY_BY_WEIGHT[weight] ?? FAMILY_BY_WEIGHT["400"];
 }
 
+/**
+ * True for Reanimated 4 AnimatedStyle/AnimatedProps handles (the objects
+ * useAnimatedStyle returns): they own `viewDescriptors`/`initial` internals.
+ * Those are UI-thread style objects — the components that use them already
+ * set `fontFamily` inside their worklet, and touching their shape breaks
+ * animation wiring (and expo-router's dev-mode Slot style guard).
+ */
+function isAnimatedStyleHandle(style: unknown): boolean {
+  if (!style || typeof style !== "object") return false;
+  if (Array.isArray(style)) return style.some(isAnimatedStyleHandle);
+  return (
+    "viewDescriptors" in (style as object) ||
+    "jestAnimatedValues" in (style as object) ||
+    "styleUpdaterContainer" in (style as object)
+  );
+}
+
 let applied = false;
 
 /**
@@ -116,12 +133,17 @@ export function applyGlobalFont(): void {
   const wrap = (fn: (type: unknown, props: unknown, ...children: unknown[]) => unknown) =>
     function patched(this: unknown, type: unknown, props: unknown, ...rest: unknown[]) {
       if (isTarget(type)) {
-        const family = familyFor(props as Record<string, unknown> | null);
-        if (family) {
-          const existing = (props ?? {}) as Record<string, unknown>;
+        const currentProps = (props ?? null) as Record<string, unknown> | null;
+        const family = familyFor(currentProps);
+        if (family && !isAnimatedStyleHandle(currentProps?.style)) {
+          const existing = currentProps ?? {};
           props = {
             ...existing,
-            style: [{ fontFamily: family }, existing.style].filter(Boolean),
+            // One plain object, not an array — expo-router's dev-time Slot
+            // guard (and StyleSheet consumers generally) reject array styles
+            // on elements it validates; flatten keeps the same precedence:
+            // the component's own style wins over the injected family.
+            style: StyleSheet.flatten([{ fontFamily: family }, existing.style as never]),
           };
         }
       }
