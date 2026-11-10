@@ -32,6 +32,7 @@ import { useTaste } from "@/components/providers/TasteProvider";
 import { useOffline } from "@/components/providers/OfflineProvider";
 import { useGuestLock } from "@/components/providers/GuestLockProvider";
 import { playPad as firePad, type PadName } from "@/lib/dj/pads";
+import { onAudioInterruption, deactivateAudioSession } from "@/lib/wake-info";
 import { getItem, setItem } from "@/lib/store";
 
 /* ------------------------------------------------------------------ *
@@ -1467,6 +1468,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void AudioManager.setAudioSessionActivity(true).catch(() => undefined);
     AudioManager.observeAudioInterruptions(true);
+    /* Android 13+ needs POST_NOTIFICATIONS before the foreground-service
+       notification (the thing that keeps playback alive when the app is
+       swiped away) can be shown. */
+    void AudioManager.requestNotificationPermissions().catch(() => undefined);
     return () => {
       spatialCleanupRef.current();
     };
@@ -1530,6 +1535,16 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     attemptsRef.current = 1;
     recoveryRef.current = setTimeout(() => retryRef.current(), PLAYBACK_RETRY_AFTER[0]);
   }, []);
+
+  /* Call/other-app interruption focus: when the system hands the audio
+     session back, the interrupted track takes itself up — the media-focus
+     twin of the web's visibility/statechange revives. */
+  useEffect(() => {
+    const interruption = onAudioInterruption((event) => {
+      if (event.type === "ended" && event.shouldResume) recoverPlayback();
+    });
+    return interruption;
+  }, [recoverPlayback]);
 
   const handlePause = useCallback(() => {
     pausedRef.current = true;
@@ -1967,6 +1982,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         handle.pause();
         handle.setVolume(0);
       }
+      // Drop the lock-screen/foreground-service notification and hand the
+      // OS audio session back, so no stale media notification outlives us.
+      void PlaybackNotificationManager.hide().catch(() => undefined);
+      void deactivateAudioSession();
       void context.close().catch(() => undefined);
       releaseContext();
       analyserRef.current = null;

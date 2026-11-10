@@ -57,6 +57,9 @@
     "tailwindcss": "^4.3.3",
     "uniwind": "^1.13.0"
   },
+  "react-native-audio-api": {
+    "enableFFmpeg": true
+  },
   "devDependencies": {
     "@types/crypto-js": "^4.2.2",
     "@types/react": "~19.3.0",

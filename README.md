@@ -30,24 +30,66 @@ documented in [`docs/PORTING_CONVENTIONS.md`](docs/PORTING_CONVENTIONS.md).
 ```bash
 cp .env.example .env        # set EXPO_PUBLIC_API_URL (your zyrava-server)
 npm install
-npx expo start -c           # Metro
 ```
 
-`react-native-audio-api` is a native module — **Expo Go will not carry the audio
-engine**. Use a development build:
+`react-native-audio-api` is a native module — **Expo Go cannot carry the audio
+engine** (it reports exactly *"failed to install react-native-audio-api / the
+native lib could not be found"* — the module simply isn't inside Expo Go). Build
+a development build instead:
 
 ```bash
-npx expo prebuild
-npx expo run:android        # or: npx expo run:ios
+npx expo prebuild --clean     # generates android/ & ios/ with the audio plugin
+npx expo run:android          # or: npx expo run:ios   (installs on the device)
+npx expo start --dev-client   # afterwards: Metro for JS-only reloads
 ```
 
 - `EXPO_PUBLIC_API_URL` must be reachable from the device (a LAN IP, not
-  `localhost`, on Android emulators `10.0.2.2` maps to the host).
-- The remote streaming decoder needs FFmpeg; `app.json` already passes
-  `enableFFmpeg: true` to the `react-native-audio-api` plugin.
-- The account API (`../zyrava-server`) is used unchanged — the same
+  `localhost`; on Android emulators `10.0.2.2` maps to the host).
+- Remote streaming needs FFmpeg in the native build; `app.json` already sets
+  `enableFFmpeg: true` on the `react-native-audio-api` plugin. The Gradle/CocoaPods
+  step downloads those prebuilts — the first build needs network. If you want a
+  no-FFmpeg build, set it to `false` (audio is then fully downloaded per track
+  before playback).
+- `expo run:android` requires a JDK 17+ and the Android SDK (`ANDROID_HOME`).
+  No local Android toolchain? Use a cloud build: `eas build -p android --profile development`.
+
+## Background playback (even when the app is swiped away)
+
+Configured through the `react-native-audio-api` config plugin in `app.json`:
+
+- **Android** — a `mediaPlayback` **foreground service** (`androidFSStopWithTask:
+  false`) keeps playing when the app is backgrounded, screen-locked, or removed
+  from recents; the persistent notification carries artwork, title, transport,
+  skip (±10 s) and scrub controls, and the service holds the process alive, so
+  the queue keeps advancing track after track. Runtime `POST_NOTIFICATIONS`
+  permission is requested when the session starts (Android 13+). OEM battery
+  killers (Xiaomi/Huawei/OnePlus…) can still cut in — set the app to
+  "unrestricted" battery usage if playback dies on your device.
+- **iOS** — the `audio` background mode keeps playback + lock-screen/Control
+  Center/CarPlay (via `MPNowPlayingInfoCenter`) running indefinitely in the
+  background, with interruptions (calls, other apps) ducking and resuming.
+  Apple hard-kills the app when you force-quit from the app switcher — no iOS
+  app survives that; background/locked playback is the supported mode.
+- Call/other-app interruptions pause the track and take it back when the system
+  hands the session over (focus-aware `AudioManager` observation in the player).
+
+- The account API (`../zyrava-server`) is used **unchanged** — the same
   session-cookie + CSRF flow the web uses, kept alive by the mobile cookie jar
   (`src/lib/net.ts`).
+- **Background playback (Android, survives app close/swipe-away):** a
+  `mediaPlayback` foreground service is wired in `app.json`
+  (`androidForegroundService: true`, `androidFSStopWithTask: false`,
+  `POST_NOTIFICATIONS` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK` permissions). The
+  library shows the persistent media notification (artwork + transport) as
+  soon as a track arms — that notification is what keeps the service, and
+  playback, alive after the app is swiped away. Some aggressive OEM launchers
+  (Xiaomi/MIUI, OnePlus/Oxygen, Huawei) may still kill background apps — grant
+  ZYRAVA "unrestricted battery" / autostart in system settings if playback dies
+  when the app is closed.
+- **Background playback (iOS):** `iosBackgroundMode: true` writes the `audio`
+  UIBackgroundMode; playback + lock-screen controls continue with the app in
+  the background or screen locked. (A swipe-kill from the app switcher stops
+  any iOS app's process by design — background playback is the supported mode.)
 
 ## Folder map (mirrors the web app 1:1)
 
