@@ -63,18 +63,24 @@ export default function RootLayout(): JSX.Element | null {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    void hydrateStorage().then(() => {
-      prePaintTheme();
-      // Inter becomes the app's typeface the moment fonts are in memory,
-      // before the first Text renders — the web's global font-family.
-      // Belt-and-braces: typography must never be able to block boot.
-      try {
-        applyGlobalFont();
-      } catch {
-        /* system font fallback */
-      }
-      setReady(true);
-    });
+    // Boot must never hang on storage: worst case, the app runs from the
+    // empty in-memory cache and persistence simply no-ops.
+    void hydrateStorage()
+      .then(() => {
+        prePaintTheme();
+        // Inter becomes the app's typeface the moment fonts are in memory,
+        // before the first Text renders — the web's global font-family.
+        // Belt-and-braces: typography must never be able to block boot.
+        try {
+          applyGlobalFont();
+        } catch {
+          /* system font fallback */
+        }
+        setReady(true);
+      })
+      .catch(() => {
+        setReady(true);
+      });
   }, []);
 
   useEffect(() => {

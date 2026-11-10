@@ -130,7 +130,7 @@ export function applyGlobalFont(): void {
 
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const reactExports = require("react") as { createElement: unknown };
-  tryAssign(reactExports, "createElement", wrap(reactExports.createElement as never));
+  const createPatched = tryAssign(reactExports, "createElement", wrap(reactExports.createElement as never));
 
   // The compiled JSX runtime is what actually runs under reactCompiler.
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -138,6 +138,11 @@ export function applyGlobalFont(): void {
     jsx: unknown;
     jsxs: unknown;
   };
-  tryAssign(jsxRuntime, "jsx", wrap(jsxRuntime.jsx as never));
-  tryAssign(jsxRuntime, "jsxs", wrap(jsxRuntime.jsxs as never));
+  const jsxPatched = tryAssign(jsxRuntime, "jsx", wrap(jsxRuntime.jsx as never));
+  const jsxsPatched = tryAssign(jsxRuntime, "jsxs", wrap(jsxRuntime.jsxs as never));
+
+  // One line of truth in the Metro log about whether Inter took effect.
+  console.info(
+    `[zyrava] global font patch: createElement=${createPatched} jsx=${jsxPatched} jsxs=${jsxsPatched}`
+  );
 }
