@@ -535,7 +535,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const [spatialMode, setSpatialModeState] = useState<SpatialMode>("off");
   /* Native truth: the graph (and its analyser tap) is live from the first
      frame — no CORS probe gates it, unlike the web's lazy upgrade path. */
-  const [visualizerReady, setVisualizerReady] = useState(true);
+  // The analyser exists from the first loaded track onward.
+  const [visualizerReady, setVisualizerReady] = useState(false);
   const [nowPlayingOpen, setNowPlayingOpenState] = useState(false);
 
   /* Studio mixer values — refs mirror them so the graph reads the freshest
@@ -1470,6 +1471,23 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     ensureRackRef.current = ensureRack;
   }, [ensureRack]);
 
+  // The tag unmounted (endSession): drop the per-element graph state so the
+  // next mount rebuilds cleanly in its own onLoad.
+  useEffect(() => {
+    if (source) return; // the tag is still mounted — nothing to release
+    spatialCleanupRef.current();
+    spatialCleanupRef.current = () => {};
+    try {
+      mediaSourceRef.current?.disconnect();
+    } catch {
+      /* already detached */
+    }
+    mediaSourceRef.current = null;
+    elementRef.current = null;
+    analyserRef.current = null;
+    setVisualizerReady(false);
+  }, [source]);
+
   /* Native media session on for the whole app. The graph itself cannot be
      wired yet — the media element only mounts once a track is armed (see the
      source effect), keeping `<Audio>` away from an empty src. */
@@ -1687,7 +1705,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     if (!source) return;
     const handle = audioRef.current;
     if (!handle) return;
-    ensureGraph();
+    // The graph is wired in onLoad — createMediaElementSource throws while
+    // the tag has no loaded source, and a loaded element self-routes to the
+    // output, so pre-load wiring attempts would only ever fail.
     handle.setPlaybackRate(rateRef.current);
     if (shouldPlayRef.current && !playPendingRef.current) {
       playPendingRef.current = true;
@@ -2387,8 +2407,22 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         durationRef.current = loadedDuration;
         setDuration(loadedDuration);
       }
+      // First load of a mounted element wires the processing graph
+      // (source → pre-amp → … → master → speakers + the analyser taps) —
+      // the only moment createMediaElementSource is legal.
+      if (!analyserRef.current) {
+        const analyser = ensureGraph();
+        setVisualizerReady(Boolean(analyser));
+        if (analyser) {
+          // The master gain owns loudness from here — lift the element back
+          // to unity so only the fader curve moves the level, web parity.
+          const handle = audioRef.current;
+          handle?.setVolume(1);
+          handle?.setMuted(false);
+        }
+      }
     },
-    []
+    [ensureGraph]
   );
 
   const handleError = useCallback(

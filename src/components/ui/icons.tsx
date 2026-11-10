@@ -448,7 +448,10 @@ export function sizeFromClassName(className?: string): number | undefined {
   const match = /(?:^|\s)size-([\d.]+)(?=\s|$)/.exec(className ?? "");
   if (!match) return undefined;
   const value = Number.parseFloat(match[1]);
-  return Number.isFinite(value) ? value * 16 : undefined;
+  // Tailwind's spacing scale is 0.25rem per unit, so `size-4` is 1rem = 16px,
+  // `size-3.5` is 14px, `size-12` is 48px. (Multiplying by 16 here made every
+  // icon four times too large — the "icons are too big" report.)
+  return Number.isFinite(value) ? value * 4 : undefined;
 }
 
 /** `opacity-N` utility (Tailwind 0–100 scale) → 0–1 fraction. */

@@ -1,11 +1,13 @@
 import {
+  cloneElement,
   forwardRef,
+  isValidElement,
   useEffect,
   type ComponentProps,
   type ComponentRef,
+  type ReactElement,
   type ReactNode,
 } from "react";
-import { cloneElement, isValidElement, type ReactElement } from "react";
 import { Text } from "react-native";
 import { Link, type LinkProps } from "expo-router";
 import Animated, {
@@ -186,7 +188,6 @@ function renderChildren(children: ReactNode, color: string, labelClassName?: str
   }
   const nodes = Array.isArray(children) ? children : [children];
   const elements = nodes.filter((node) => isValidElement(node));
-  const textNodes = nodes.filter((node) => typeof node === "string" || typeof node === "number");
   if (!elements.length) {
     // Pure text (possibly fragmented) — one Label keeps web typography.
     return (
