@@ -140,7 +140,7 @@ export function BeatWordmark({
     <View aria-hidden accessibilityElementsHidden className="relative">
       {/* stacked layers: both share the box; the base one sizes it. */}
       <Text className={cn("opacity-[0.045]", className)}>{children}</Text>
-      <Animated.Text className={cn("absolute inset-0", className)} animatedStyle={glowStyle}>
+      <Animated.Text className={cn("absolute inset-0", className)} style={glowStyle}>
         {children}
       </Animated.Text>
     </View>
