@@ -107,7 +107,7 @@ export function DownloadsView() {
         meta={`${count}${runtime ? ` · ${runtime}` : ""} · ${bytes} kept in this browser`}
       >
         <RoundPlay onClick={playAll} disabled={!songs.length} label="Play every saved song">
-          <Icon name="play" size={18} className="fill-current" />
+          <Icon name="play" size={18} className="fill-current text-accent-foreground" />
         </RoundPlay>
         <OutlineAction
           onClick={shufflePlay}
@@ -158,7 +158,7 @@ export function OfflineView({ onImport }: { onImport: () => void }) {
         meta={`${count}${runtime ? ` · ${runtime}` : ""} · ${bytes} from your own folder`}
       >
         <RoundPlay onClick={playAll} disabled={!songs.length} label="Play every one of your songs">
-          <Icon name="play" size={18} className="fill-current" />
+          <Icon name="play" size={18} className="fill-current text-accent-foreground" />
         </RoundPlay>
         <OutlineAction
           onClick={shufflePlay}
