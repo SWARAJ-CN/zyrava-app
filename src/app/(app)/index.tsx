@@ -711,7 +711,7 @@ export default function MusicPage(): JSX.Element {
             getAnalyser={getAnalyser}
             playing={playing}
             hueSeed={songHueSeed(activeId)}
-            className="text-[64px] font-black leading-none tracking-tighter"
+            className="text-[80px] font-black leading-none tracking-tighter"
           >
             ZYRAVA
           </BeatWordmark>
