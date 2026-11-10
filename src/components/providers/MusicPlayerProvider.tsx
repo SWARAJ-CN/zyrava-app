@@ -1601,10 +1601,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setProgress(0);
     positionRef.current = 0;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDuration(current.duration || 0);
     durationRef.current = current.duration || 0;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPlayerError(null);
     endedRef.current = false;
     streamFailuresRef.current = 0;
@@ -1665,7 +1663,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       // watchdog and the retry ladder take over from there.
       handle.play();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [source]);
 
   /**
