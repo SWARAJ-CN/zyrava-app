@@ -12,12 +12,15 @@
  *
  * Structure mirrors the browser build 1:1: the @theme inline bridge for
  * utility names, the raw :root alias block, the layout tokens, and the
- * accent identity per scheme. Only two platform adjustments: values that
+ * accent identity per scheme. `static` keeps every token in the runtime
+ * theme table even when no className references it — components resolve
+ * some of these through useCSSVariable() at render time (web reads them
+ * the same way off the cascade). Only two platform adjustments: values
  * the native colour resolver cannot evaluate lazily are written per
  * light/dark scope, and the font stack carries the RN-registered Inter
  * weight families (see src/lib/global-font.ts).
  * ------------------------------------------------------------------ */
-@theme inline {
+@theme inline static {
   /* Surfaces */
   --color-surface-muted: var(--surface-secondary);
   --color-surface-inset: var(--surface-secondary);

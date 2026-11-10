@@ -96,6 +96,7 @@ export default function RootLayout(): JSX.Element | null {
             /* The web raises bottom toast regions above the player bar
                (--toast-clearance); insets do the same natively. */
             toast: { insets: { bottom: 96 } },
+            devInfo: { stylingPrinciples: false },
           }}
         >
           <I18nProvider initialLocale={initialLocale}>
