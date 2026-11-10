@@ -206,7 +206,7 @@ export function CommunityProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!authenticated) return;
 
-    const off: Array<() => void> = [];
+    const off: (() => void)[] = [];
     // This subscription owns these timers, so its cleanup cancels exactly them.
     const timers = typingTimers.current;
 

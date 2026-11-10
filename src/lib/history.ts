@@ -35,7 +35,7 @@ export interface TasteState {
   heard: HeardRecord[];
   artists: NamedScore[];
   languages: NamedScore[];
-  queries: Array<{ q: string; at: string }>;
+  queries: { q: string; at: string }[];
 }
 
 export interface IngestResult {

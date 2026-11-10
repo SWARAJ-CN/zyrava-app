@@ -397,7 +397,7 @@ export default function MusicPage(): JSX.Element {
     // · vibes: several angles per vibe — one rooted in the first language,
     //   one open, plus all other selected languages rooted;
     // · no vibes: the region's own queries as before.
-    const combos: Array<{ query: string; page: number }> = [];
+    const combos: { query: string; page: number }[] = [];
     if (freeText) {
       // A typed phrase is the query. Checked vibes narrow it; checked
       // languages only re-rank the results below.
@@ -1284,7 +1284,7 @@ function FilterRow({
   chips,
 }: {
   label: string;
-  chips: Array<{ key: string; label: string; checked: boolean; onPress: () => void }>;
+  chips: { key: string; label: string; checked: boolean; onPress: () => void }[];
 }): JSX.Element {
   return (
     <View className="flex-row items-center gap-3 border-t border-separator px-3.5 py-2.5">

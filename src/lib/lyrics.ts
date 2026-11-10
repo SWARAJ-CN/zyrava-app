@@ -94,7 +94,7 @@ function fractionToMs(fraction: string | undefined): number {
  */
 export function parseLrc(raw: string, ceiling?: number): LyricLine[] {
   let offsetMs = 0;
-  const timed: Array<{ start: number; text: string }> = [];
+  const timed: { start: number; text: string }[] = [];
 
   for (const physicalLine of raw.split(/\r?\n/)) {
     let rest = physicalLine.trim();

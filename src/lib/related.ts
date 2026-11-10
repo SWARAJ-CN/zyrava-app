@@ -193,7 +193,7 @@ export function similarity(a: Profile, b: Profile): number {
 function strongestReason(parts: SimilarityBreakdown): string {
   // Judged on what each term actually contributed to the score, so an exact
   // language match never outranks a shared artist.
-  const contributions: Array<[string, number]> = [
+  const contributions: [string, number][] = [
     ["Same artist", WEIGHTS.artist * parts.artist],
     ["Same album", WEIGHTS.album * parts.album],
     ["Similar mood", WEIGHTS.mood * parts.mood],
@@ -247,7 +247,7 @@ export function relatedSeeds(song: Song): string[] {
 
 export interface RelatedInput {
   /** Candidate pool, in seed order — repeats across seeds become evidence. */
-  pool: Array<{ song: Song; seedRank: number }>;
+  pool: { song: Song; seedRank: number }[];
   limit?: number;
   /** Max tracks per artist in the run. */
   artistCap?: number;

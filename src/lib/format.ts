@@ -98,7 +98,7 @@ export function relativeTime(iso: string | Date): string {
   if (Number.isNaN(date.getTime())) return "—";
   const diff = date.getTime() - Date.now();
   const abs = Math.abs(diff);
-  const units: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
     ["year", 31_536_000_000],
     ["month", 2_592_000_000],
     ["week", 604_800_000],

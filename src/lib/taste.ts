@@ -137,7 +137,7 @@ export interface LogBuffer {
   v: number;
   events: LoggedEvent[];
   songs: Record<string, StoredSong>;
-  shown: Array<{ id: string; at: number }>;
+  shown: { id: string; at: number }[];
   /** Epoch milliseconds before which a retry is pointless. */
   backoffUntil: number;
 }
@@ -393,7 +393,7 @@ export function buildVector(
   /** Artist-word love, accumulated log-scale across every positive row. */
   const affinity = new Map<string, number>();
   /** Rows inside the session window — the "right now" second centre. */
-  const sessionRows: Array<{ song: Song; w: number; profile: Profile }> = [];
+  const sessionRows: { song: Song; w: number; profile: Profile }[] = [];
   /** What was bailed on recently — the steering-away set. */
   const skipProfiles: Profile[] = [];
   const skipSeen = new Set<string>();
@@ -820,7 +820,7 @@ function reasonFor(item: MmrItem, seedProfiles: Profile[]): string {
     }
   }
   const parts = breakdown(best, item.profile);
-  const contributions: Array<[string, number]> = [
+  const contributions: [string, number][] = [
     ["Same artist", 0.3 * parts.artist],
     ["Similar mood", 0.18 * parts.mood],
     ["Same album", 0.14 * parts.album],
@@ -910,7 +910,7 @@ export async function exploreShelf(
   const title = "Exploring";
   const excluded = guards(v, options);
 
-  const tails: Array<{ phrase: string; score: number }> = [];
+  const tails: { phrase: string; score: number }[] = [];
   for (const artist of v.tailArtists) {
     tails.push({ phrase: normalize(artist.name), score: artist.score });
   }

@@ -289,7 +289,7 @@ async function gather(seed: LyricsSeed): Promise<LyricCandidate[]> {
   let failure: LyricsUpstreamError | null = null;
   const duration = seed.duration ? String(Math.round(seed.duration)) : "";
 
-  const steps: Array<{ path: "/get" | "/search"; params: Record<string, string> }> = [
+  const steps: { path: "/get" | "/search"; params: Record<string, string> }[] = [
     {
       path: "/get",
       params: { track_name: seed.title, artist_name: seed.artist, duration },

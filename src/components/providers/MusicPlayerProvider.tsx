@@ -195,7 +195,7 @@ export type SpatialMode =
   | "telephone"
   | "echo";
 
-export const SPATIAL_MODES: Array<{ value: SpatialMode; label: string; hint: string }> = [
+export const SPATIAL_MODES: { value: SpatialMode; label: string; hint: string }[] = [
   { value: "off", label: "Off", hint: "Raw stream" },
   { value: "stereo", label: "Stereo", hint: "Standard two-channel" },
   { value: "mono", label: "Mono", hint: "Both channels summed" },
@@ -995,7 +995,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       // Node types unavailable — stay silent-equivalent (direct).
       input.connect(output);
     }
-  }, []);
+  }, [context]);
 
   /**
    * Parameter worker for the whole DJ rack — identical values and glide
@@ -1069,7 +1069,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const addedDb = Math.max(0, subDb) + (loudnessOn ? 4 : 0) + compAmt * 6;
       glide(busTrimRef.current.gain, Math.pow(10, -addedDb / 20));
     }
-  }, [fx, sweep, subDb, compAmt, limiterOn, loudnessOn]);
+  }, [fx, sweep, subDb, compAmt, limiterOn, loudnessOn, context]);
 
   useEffect(() => {
     applyFX();
@@ -1104,7 +1104,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     } catch {
       /* routing unavailable */
     }
-  }, []);
+  }, [context]);
 
   /**
    * Wires the graph once — light form first (source → pre-amp → balance →
@@ -1213,7 +1213,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       analyserRef.current = null;
       return null;
     }
-  }, [applyRouting, applyFX]);
+  }, [applyRouting, applyFX, context]);
 
   /**
    * The heavy section, spliced between the mixer head and djOut — EQ ladder,
@@ -1331,7 +1331,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         [
           [0.017, 0.48, 0.005],
           [0.026, 0.34, 0.0065],
-        ] as Array<[number, number, number]>
+        ] as [number, number, number][]
       ).forEach(([time, lfoRate, depth]) => {
         const delay = ctx.createDelay(0.05);
         delay.delayTime.value = time;
@@ -1456,7 +1456,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     } finally {
       rackBuildingRef.current = false;
     }
-  }, [applySpatial, applyRouting, applyFX]);
+  }, [applySpatial, applyRouting, applyFX, context]);
 
   useEffect(() => {
     ensureRackRef.current = ensureRack;
@@ -1527,7 +1527,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       recoveryRef.current = null;
       retryRef.current = () => {};
     };
-  }, []);
+  }, [context]);
 
   const recoverPlayback = useCallback(() => {
     if (!shouldPlayRef.current || userPausedRef.current) return;
@@ -1565,7 +1565,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       }
     });
     return () => sub.remove();
-  }, [recoverPlayback]);
+  }, [recoverPlayback, context]);
 
   /* Apply EQ changes live (gain moves only — no rewiring, no clicks). */
   useEffect(() => {
@@ -1991,7 +1991,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       analyserRef.current = null;
       mediaSourceRef.current = null;
     },
-    []
+    [context]
   );
 
   const togglePlay = useCallback(() => {
@@ -2009,7 +2009,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       clearRecovery();
       handle.pause();
     }
-  }, [clearRecovery, current, source]);
+  }, [clearRecovery, current, source, context]);
 
   const startQueue = useCallback(
     (list: Song[], label: string, position: number) => {
@@ -2104,7 +2104,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       sampleRate: ctx?.sampleRate ?? null,
       channels: ctx?.destination.channelCount ?? null,
     };
-  }, []);
+  }, [context]);
 
   /** Stereo RMS pair from the meter taps (0 → silence, ~1 → full swing). */
   const getLevels = useCallback((): [number, number] => {
@@ -2204,7 +2204,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     }
     void ctx.resume().catch(() => undefined);
     firePad(ctx, bus, name);
-  }, []);
+  }, [context]);
 
   const setFx = useCallback((patch: Partial<FxLevels>) => {
     setFxState((levels) => ({ ...levels, ...patch }));

@@ -113,7 +113,7 @@ export interface DbTable {
   count: number;
   limit: number;
   skip: number;
-  documents: Array<Record<string, unknown>>;
+  documents: Record<string, unknown>[];
 }
 
 export const EMPTY_ADDRESS: CustomerAddress = {

@@ -11,9 +11,9 @@ import { netFetch } from "./net";
 
 export class ApiError extends Error {
   readonly status: number;
-  readonly details?: Array<{ path: string; message: string }>;
+  readonly details?: { path: string; message: string }[];
 
-  constructor(message: string, status = 0, details?: Array<{ path: string; message: string }>) {
+  constructor(message: string, status = 0, details?: { path: string; message: string }[]) {
     super(message);
     this.name = "ApiError";
     this.status = status;
@@ -121,7 +121,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
   if (response.status === 204) return undefined as T;
 
   const payload = (await response.json().catch(() => null)) as
-    | (T & { error?: string; details?: Array<{ path: string; message: string }> })
+    | (T & { error?: string; details?: { path: string; message: string }[] })
     | null;
 
   if (!response.ok) {
