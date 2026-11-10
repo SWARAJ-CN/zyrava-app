@@ -110,13 +110,15 @@ export function SearchWithSuggestions({
             <Text className="px-3.5 pb-1.5 pt-2.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-faint-foreground">
               {query.length >= 2 ? "Songs" : "Trending near you"}
             </Text>
-            <ScrollView className="max-h-80" showsVerticalScrollIndicator>
+            <ScrollView className="max-h-80" nestedScrollEnabled>
               {loading && !songs.length ? (
                 <Text className="px-3.5 py-4 text-xs text-muted">Searching…</Text>
               ) : null}
               {!loading && !songs.length ? (
                 <Text className="px-3.5 py-4 text-xs text-muted">
-                  {query.length >= 2 ? "No matches yet — keep typing." : "Nothing trending right now."}
+                  {query.length >= 2
+                    ? "No matches yet — keep typing."
+                    : "Nothing trending right now."}
                 </Text>
               ) : null}
               {songs.map((song) => (
@@ -141,14 +143,20 @@ export function SearchWithSuggestions({
                     )}
                   </View>
                   <View className="min-w-0 flex-1">
-                    <Text numberOfLines={1} className="block truncate text-[12px] font-semibold text-foreground">
+                    <Text
+                      numberOfLines={1}
+                      className="block truncate text-[12px] font-semibold text-foreground"
+                    >
                       {song.title}
                     </Text>
                     <Text numberOfLines={1} className="block truncate text-[10px] text-muted">
                       {song.artist}
                     </Text>
                   </View>
-                  <Icon name="play" className="size-3.5 flex-none fill-current text-faint-foreground" />
+                  <Icon
+                    name="play"
+                    className="size-3.5 flex-none fill-current text-faint-foreground"
+                  />
                 </Pressable>
               ))}
             </ScrollView>

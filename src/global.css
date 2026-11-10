@@ -70,3 +70,52 @@
     --background: #17111c;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Dock + shadow tokens — the web defines these with color-mix over
+ * theme vars; Uniwind needs concrete per-scheme values, so each line
+ * below is the web formula evaluated against the HeroUI palette.
+ *   --dock-bg    = surface-secondary 68% + background
+ *   --dock-hover = foreground 5% / transparent
+ *   --dock-active= accent 13% / transparent
+ *   --dock-line  = foreground 8% / transparent
+ * ------------------------------------------------------------------ */
+@layer theme {
+  :root {
+    @variant light {
+      --dock-bg: #f8f7fa;
+      --dock-hover: rgba(33, 32, 37, 0.05);
+      --dock-active: rgba(89, 166, 149, 0.13);
+      --dock-line: rgba(33, 32, 37, 0.08);
+    }
+
+    @variant dark {
+      --dock-bg: #1d1723;
+      --dock-hover: rgba(248, 249, 250, 0.05);
+      --dock-active: rgba(130, 203, 180, 0.13);
+      --dock-line: rgba(248, 249, 250, 0.08);
+    }
+  }
+}
+
+@theme inline {
+  --color-dock: var(--dock-bg);
+  --color-dock-hover: var(--dock-hover);
+  --color-dock-active: var(--dock-active);
+  --color-dock-line: var(--dock-line);
+}
+
+@utility shadow-field {
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.04),
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+@utility shadow-pop {
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.02),
+    0 -6px 12px rgba(0, 0, 0, 0.01),
+    0 14px 28px rgba(0, 0, 0, 0.03);
+}
+

@@ -92,8 +92,8 @@ export function ImportSongsModal({ open, onClose }: { open: boolean; onClose: ()
 
         <Text className="text-[11px] text-faint-foreground">
           Up to {IMPORT_LIMITS.maxFiles} files at a time, none larger than{" "}
-          {formatBytes(IMPORT_LIMITS.maxBytes)}. Names like “Artist - Title” are read as the
-          artist and the song.
+          {formatBytes(IMPORT_LIMITS.maxBytes)}. Names like “Artist - Title” are read as the artist
+          and the song.
         </Text>
       </View>
     </Modal>

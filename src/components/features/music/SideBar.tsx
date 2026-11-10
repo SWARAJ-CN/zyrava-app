@@ -1,24 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { Dimensions } from "react-native";
-import { Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Dimensions, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Link } from "expo-router";
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { Slider } from "heroui-native";
 import { cn } from "@/lib/cn";
 import { Icon } from "@/components/ui/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EqBars } from "@/components/features/music/EqBars";
 import { formatRuntime } from "@/lib/format";
-
-/** heroui hands Slider changes as `number | number[]` — we always ask one value. */
-function sliderValue(value: number | number[]): number {
-  return Array.isArray(value) ? value[0] : value;
-}
 import { useAuth } from "@/components/providers/AuthProvider";
 import { useGuestLock } from "@/components/providers/GuestLockProvider";
 import { useLibrary } from "@/components/providers/LibraryProvider";
@@ -32,6 +22,11 @@ import {
   type EqPreset,
   type SpatialMode,
 } from "@/components/providers/MusicPlayerProvider";
+
+/** heroui hands Slider changes as `number | number[]` — we always ask one value. */
+function sliderValue(value: number | number[]): number {
+  return Array.isArray(value) ? value[0] : value;
+}
 
 /* ------------------------------------------------------------------ *
  * The dock — ported as the mobile drawer component.
@@ -59,11 +54,11 @@ type DockTab = "browse" | "library" | "dashboard" | "mixer";
  */
 type DockEntry = DockTab | "chat";
 
-const TABS: Array<{
+const TABS: {
   value: DockEntry;
   label: string;
   icon: "music" | "heart" | "gauge" | "sliders" | "message";
-}> = [
+}[] = [
   { value: "browse", label: "Browse", icon: "music" },
   { value: "library", label: "Library", icon: "heart" },
   { value: "dashboard", label: "Audio desk", icon: "gauge" },
@@ -71,11 +66,11 @@ const TABS: Array<{
   { value: "chat", label: "Community", icon: "message" },
 ];
 
-const BROWSE_LINKS: Array<{
+const BROWSE_LINKS: {
   label: string;
   id: "top" | "region-library" | "library-list";
   icon: "search" | "globe" | "list";
-}> = [
+}[] = [
   { label: "Top of the page", id: "top", icon: "search" },
   { label: "Region library", id: "region-library", icon: "globe" },
   { label: "Song list", id: "library-list", icon: "list" },
@@ -248,7 +243,10 @@ function DockBody({
               <Icon name="music" className="size-4" strokeWidth={2.2} />
             </View>
             <View className="min-w-0 flex-1">
-              <Text numberOfLines={1} className="truncate text-[12.5px] font-bold leading-none tracking-[0.22em] text-foreground">
+              <Text
+                numberOfLines={1}
+                className="truncate text-[12.5px] font-bold leading-none tracking-[0.22em] text-foreground"
+              >
                 ZYRAVA
               </Text>
               <Text className="mt-1.5 truncate text-[9px] font-medium uppercase leading-none tracking-[0.2em] text-muted">
@@ -328,7 +326,9 @@ function DockBody({
               />
               {wide ? (
                 <>
-                  <Text numberOfLines={1} className="min-w-0 flex-1 truncate text-left">{entry.label}</Text>
+                  <Text numberOfLines={1} className="min-w-0 flex-1 truncate text-left">
+                    {entry.label}
+                  </Text>
                   {entry.value === "chat" && chatBadge ? (
                     <Text className="h-5 min-w-5 flex-none items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-accent-foreground tabular-nums">
                       {chatBadge > 9 ? "9+" : chatBadge}
@@ -338,7 +338,10 @@ function DockBody({
                   ) : null}
                 </>
               ) : entry.value === "chat" && chatBadge ? (
-                <View aria-hidden className="absolute right-1.5 top-1.5 size-2 rounded-full bg-accent" />
+                <View
+                  aria-hidden
+                  className="absolute right-1.5 top-1.5 size-2 rounded-full bg-accent"
+                />
               ) : null}
             </Pressable>
           );
@@ -428,7 +431,8 @@ function DockBody({
                     { head: "EQ", tail: eqPreset },
                     {
                       head: "Space",
-                      tail: SPATIAL_MODES.find((mode) => mode.value === spatialMode)?.label ?? "Off",
+                      tail:
+                        SPATIAL_MODES.find((mode) => mode.value === spatialMode)?.label ?? "Off",
                     },
                     {
                       head: "Output",
@@ -443,7 +447,10 @@ function DockBody({
                       )}
                     >
                       <Text className="text-[12px] font-medium text-muted">{row.head}</Text>
-                      <Text numberOfLines={1} className="min-w-0 truncate text-[12px] font-semibold text-foreground">
+                      <Text
+                        numberOfLines={1}
+                        className="min-w-0 truncate text-[12px] font-semibold text-foreground"
+                      >
                         {row.tail}
                       </Text>
                     </View>
@@ -525,11 +532,15 @@ function DockBody({
                         onPress={submitPlaylist}
                         className="h-9 flex-none rounded-lg bg-accent px-2.5 items-center justify-center"
                       >
-                        <Text className="text-[11px] font-semibold text-accent-foreground">Add</Text>
+                        <Text className="text-[11px] font-semibold text-accent-foreground">
+                          Add
+                        </Text>
                       </Pressable>
                     </View>
                     {playlistError ? (
-                      <Text className="pt-1 text-[10px] text-danger-soft-foreground">{playlistError}</Text>
+                      <Text className="pt-1 text-[10px] text-danger-soft-foreground">
+                        {playlistError}
+                      </Text>
                     ) : null}
                   </View>
                 ) : null}
@@ -550,7 +561,9 @@ function DockBody({
                         )}
                       >
                         <Icon name="list" className="size-4 flex-none" strokeWidth={1.9} />
-                        <Text numberOfLines={1} className="min-w-0 flex-1 truncate">{playlist.name}</Text>
+                        <Text numberOfLines={1} className="min-w-0 flex-1 truncate">
+                          {playlist.name}
+                        </Text>
                         <Text className="flex-none text-[10px] tabular-nums text-faint-foreground">
                           {playlist.songs.length}
                         </Text>
@@ -599,12 +612,10 @@ function DockBody({
                   <Text className="text-[10px] font-semibold uppercase leading-none tracking-[0.14em] text-muted">
                     Studio mixer
                   </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    onPress={resetMixer}
-                    className="rounded-md"
-                  >
-                    <Text className="text-[11px] font-medium text-muted active:text-foreground">Reset</Text>
+                  <Pressable accessibilityRole="button" onPress={resetMixer} className="rounded-md">
+                    <Text className="text-[11px] font-medium text-muted active:text-foreground">
+                      Reset
+                    </Text>
                   </Pressable>
                 </View>
                 <Pressable
@@ -689,7 +700,10 @@ function DockBody({
                   />
                 </Pressable>
                 {presetOpen ? (
-                  <ScrollView className="max-h-56 rounded-lg border border-dock-line bg-dock" nestedScrollEnabled>
+                  <ScrollView
+                    className="max-h-56 rounded-lg border border-dock-line bg-dock"
+                    nestedScrollEnabled
+                  >
                     <PresetRow
                       label="Custom"
                       selected={eqPreset === "Custom"}
@@ -744,9 +758,7 @@ function DockBody({
         destructive
         onCancel={() => setHeavyPending(null)}
         onConfirm={() => {
-          applyPreset(
-            EQ_PRESETS.find((preset) => preset.label === heavyPending) ?? EQ_PRESETS[0]
-          );
+          applyPreset(EQ_PRESETS.find((preset) => preset.label === heavyPending) ?? EQ_PRESETS[0]);
           setHeavyPending(null);
         }}
       />
@@ -781,10 +793,16 @@ function DockBody({
                 ) : null}
               </View>
               <View className="min-w-0 flex-1">
-                <Text numberOfLines={1} className="block truncate text-[12px] font-semibold leading-tight text-foreground">
+                <Text
+                  numberOfLines={1}
+                  className="block truncate text-[12px] font-semibold leading-tight text-foreground"
+                >
                   {current ? current.title : "Nothing queued"}
                 </Text>
-                <Text numberOfLines={1} className="mt-1 block truncate text-[10px] font-medium leading-none text-faint-foreground">
+                <Text
+                  numberOfLines={1}
+                  className="mt-1 block truncate text-[10px] font-medium leading-none text-faint-foreground"
+                >
                   {current
                     ? `${playing ? "Playing" : "Paused"} · ${current.artist}`
                     : "Pick a track to begin"}
@@ -801,7 +819,10 @@ function DockBody({
                   <Text className="size-7 flex-none items-center justify-center rounded-full bg-accent-soft text-[10px] font-bold uppercase text-brand">
                     {accountInitial}
                   </Text>
-                  <Text numberOfLines={1} className="min-w-0 max-w-[7.5rem] truncate text-[11px] font-medium text-muted">
+                  <Text
+                    numberOfLines={1}
+                    className="min-w-0 max-w-[7.5rem] truncate text-[11px] font-medium text-muted"
+                  >
                     {accountName}
                   </Text>
                   <DockIcon label="Sign out" onClick={() => void logout()}>
@@ -809,7 +830,10 @@ function DockBody({
                   </DockIcon>
                 </View>
               ) : (
-                <Link href="/login" className="flex h-9 flex-row items-center gap-2.5 rounded-lg px-2.5">
+                <Link
+                  href="/login"
+                  className="flex h-9 flex-row items-center gap-2.5 rounded-lg px-2.5"
+                >
                   <View className="flex-row items-center gap-2.5">
                     <Icon name="user" className="size-4 text-muted" strokeWidth={1.9} />
                     <Text className="text-[12px] font-medium text-muted active:text-foreground">
@@ -840,11 +864,7 @@ function DockBody({
                 accessibilityLabel="Now playing panel"
                 className="relative size-9 overflow-hidden rounded-lg bg-surface active:scale-95"
               >
-                <Image
-                  source={{ uri: current.image }}
-                  className="size-full"
-                  resizeMode="cover"
-                />
+                <Image source={{ uri: current.image }} className="size-full" resizeMode="cover" />
                 {playing ? (
                   <View aria-hidden className="absolute inset-x-0 bottom-0 h-0.5 bg-accent" />
                 ) : null}
@@ -946,7 +966,13 @@ export function SideBar({
           className="min-h-0 flex-1 flex-col"
           style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
         >
-          <DockBody wide mobile onBrowse={onBrowse} onRegions={onRegions} onLibraryList={onLibraryList} />
+          <DockBody
+            wide
+            mobile
+            onBrowse={onBrowse}
+            onRegions={onRegions}
+            onLibraryList={onLibraryList}
+          />
         </View>
       </Animated.View>
     </View>
@@ -964,7 +990,10 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
         {value}
       </Text>
       {hint ? (
-        <Text numberOfLines={1} className="mt-1 truncate text-[10px] font-medium leading-none text-faint-foreground">
+        <Text
+          numberOfLines={1}
+          className="mt-1 truncate text-[10px] font-medium leading-none text-faint-foreground"
+        >
           {hint}
         </Text>
       ) : null}
@@ -1074,12 +1103,7 @@ function PresetRow({
         selected ? "bg-dock-active" : "active:bg-dock-hover"
       )}
     >
-      <Text
-        className={cn(
-          "text-[12px] font-medium",
-          selected ? "text-foreground" : "text-muted"
-        )}
-      >
+      <Text className={cn("text-[12px] font-medium", selected ? "text-foreground" : "text-muted")}>
         {label}
       </Text>
       {selected ? <Icon name="check" className="size-3.5 text-brand" strokeWidth={2.4} /> : null}

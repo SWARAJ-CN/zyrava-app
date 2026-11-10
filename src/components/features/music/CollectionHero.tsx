@@ -37,13 +37,11 @@ export function CollectionHero({
     <View
       className={cn(
         "relative overflow-hidden px-4 pb-5 pt-6 sm:px-6",
-        flush
-          ? "border-b border-separator"
-          : "rounded-xl border border-separator",
+        flush ? "border-b border-separator" : "rounded-xl border border-separator",
         tone === "brand"
           ? "bg-gradient-to-b from-brand-soft via-surface to-surface"
-          // The radial plain tone: no gradient engine on native — surface-secondary reads closest.
-          : "bg-surface-secondary"
+          : // The radial plain tone: no gradient engine on native — surface-secondary reads closest.
+            "bg-surface-secondary"
       )}
     >
       <View className="flex-row items-end gap-4">
@@ -81,7 +79,9 @@ export function CollectionHero({
         </View>
       </View>
 
-      {children ? <View className="mt-4 flex-row flex-wrap items-center gap-3">{children}</View> : null}
+      {children ? (
+        <View className="mt-4 flex-row flex-wrap items-center gap-3">{children}</View>
+      ) : null}
     </View>
   );
 }

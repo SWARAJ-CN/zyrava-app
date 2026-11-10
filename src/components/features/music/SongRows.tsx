@@ -42,8 +42,7 @@ const ROW_ACTION =
 function SaveRing({ value }: { value: number }) {
   const rawSeparator = useCSSVariable("var(--separator)");
   const rawAccent = useCSSVariable("var(--accent)");
-  const separator =
-    typeof rawSeparator === "string" && rawSeparator ? rawSeparator : "#3a3344";
+  const separator = typeof rawSeparator === "string" && rawSeparator ? rawSeparator : "#3a3344";
   const accent = typeof rawAccent === "string" && rawAccent ? rawAccent : "#10b981";
   const radius = 8;
   const ring = 2 * Math.PI * radius;
@@ -120,7 +119,13 @@ export function SaveToDevice({ song }: { song: Song }) {
       }}
       accessibilityState={{ selected: saved }}
       accessibilityLabel={
-        saved ? `Take ${song.title} off this device` : `Save ${song.title} on this device`
+        busy
+          ? busy.total > 0
+            ? `Saving ${song.title} — ${percent}%`
+            : `Saving ${song.title}`
+          : saved
+            ? `Take ${song.title} off this device`
+            : `Save ${song.title} on this device`
       }
       className={cn(ROW_ACTION, (saved || busy) && "text-brand")}
     >
@@ -168,10 +173,7 @@ function RowActions({ song, device }: { song: Song; device: boolean }) {
         }
         className={ROW_ACTION}
       >
-        <Icon
-          name="heart"
-          className={cn("size-4", isLiked(song) && "fill-danger text-danger")}
-        />
+        <Icon name="heart" className={cn("size-4", isLiked(song) && "fill-danger text-danger")} />
       </Pressable>
       <Pressable
         accessibilityRole="button"
@@ -371,9 +373,7 @@ function IndexCell({
           {pressed ? (
             <Icon name="play" className="size-3.5 fill-current text-foreground" />
           ) : (
-            <Text
-              className={cn("text-xs tabular-nums", active ? "text-brand" : "text-muted")}
-            >
+            <Text className={cn("text-xs tabular-nums", active ? "text-brand" : "text-muted")}>
               {index + 1}
             </Text>
           )}

@@ -56,7 +56,9 @@ function useDevicePlayback(tracks: OfflineTrack[], label: string) {
 
 function Panel({ children }: { children: ReactNode }) {
   return (
-    <View className="mt-4 rounded-xl border border-separator bg-surface p-2 sm:p-3">{children}</View>
+    <View className="mt-4 rounded-xl border border-separator bg-surface p-2 sm:p-3">
+      {children}
+    </View>
   );
 }
 

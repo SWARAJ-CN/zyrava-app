@@ -28,7 +28,7 @@ const ROW_TITLES: Record<ShelfKey, string> = {
 };
 
 export function Recommendations() {
-  const { shelves, building, vector, ensureBuilt, refresh, reset, lastShown } = useTaste();
+  const { shelves, building, vector, ensureBuilt, refresh, reset } = useTaste();
   const { startQueue } = useMusicPlayer();
   const [confirming, setConfirming] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -95,7 +95,11 @@ export function Recommendations() {
               tone="brand"
             >
               <View className="flex-row items-center gap-2">
-                <PlayButton label="Play your mix" solid onPress={() => startQueue(pickSongs(mix), "Your mix", 0)} />
+                <PlayButton
+                  label="Play your mix"
+                  solid
+                  onPress={() => startQueue(pickSongs(mix), "Your mix", 0)}
+                />
                 <PlayButton
                   label="Shuffle your mix"
                   icon="shuffle"
@@ -143,11 +147,9 @@ export function Recommendations() {
           });
         }}
       />
-      {/* data-shown marker: a11y-only bookkeeping on the web; `lastShown` is
-          kept in scope so the taste state contract stays identical. */}
-      <Text accessibilityElementsHidden numberOfLines={0} className="sr-only">
-        {lastShown.join(",")}
-      </Text>
+      {/* The web kept a hidden `data-shown={lastShown}` marker span; there is
+          no DOM attribute to mirror natively and `lastShown` is only read by
+          the taste engine itself, so the node is dropped. */}
     </View>
   );
 }
@@ -198,13 +200,22 @@ function Row({
   return (
     <View className={first ? "mt-5" : "mt-2"}>
       <View className="flex-row items-baseline justify-between gap-3 pb-2.5">
-        <Text numberOfLines={1} className="truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+        <Text
+          numberOfLines={1}
+          className="truncate text-[10px] font-semibold uppercase tracking-[0.18em] text-muted"
+        >
           {label}
         </Text>
-        <Text className="flex-none text-[11px] font-medium text-faint-foreground">{songs.length}</Text>
+        <Text className="flex-none text-[11px] font-medium text-faint-foreground">
+          {songs.length}
+        </Text>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 12, paddingBottom: 4 }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ gap: 12, paddingBottom: 4 }}
+      >
         {songs.map((song, index) => {
           const pick = shelf.picks[index];
           const reason = pick?.reason ?? "Sounds similar";
@@ -236,7 +247,10 @@ function Row({
                   <Icon name="play" className="size-3 text-white" />
                 </View>
               </View>
-              <Text numberOfLines={1} className="mt-1.5 block truncate text-[11px] font-semibold text-foreground">
+              <Text
+                numberOfLines={1}
+                className="mt-1.5 block truncate text-[11px] font-semibold text-foreground"
+              >
                 {song.title}
               </Text>
               <Text numberOfLines={1} className="block truncate text-[10px] text-muted">

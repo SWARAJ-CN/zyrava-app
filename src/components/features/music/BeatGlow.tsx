@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { View } from "react-native";
-import { AccessibilityInfo } from "react-native";
+import { View, AccessibilityInfo } from "react-native";
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -52,8 +51,26 @@ const HUE_MS = 23_000;
  *  beat-drift keyframe's end translate (as blob percentages) and rotation. */
 const BLOBS = [
   { top: "4%", left: "6%", dx: 26, dy: 34, rotate: 140, offset: 0, alpha: 0.6, period: 17_000 },
-  { top: "52%", left: "52%", dx: -30, dy: -24, rotate: -180, offset: 120, alpha: 0.6, period: 21_000 },
-  { top: "78%", left: "12%", dx: 38, dy: -30, rotate: 220, offset: 240, alpha: 0.55, period: 26_000 },
+  {
+    top: "52%",
+    left: "52%",
+    dx: -30,
+    dy: -24,
+    rotate: -180,
+    offset: 120,
+    alpha: 0.6,
+    period: 21_000,
+  },
+  {
+    top: "78%",
+    left: "12%",
+    dx: 38,
+    dy: -30,
+    rotate: 220,
+    offset: 240,
+    alpha: 0.55,
+    period: 26_000,
+  },
 ];
 
 type Drift = { x: number; y: number; r: number };
@@ -124,7 +141,10 @@ function Blob({
     <Animated.View
       // The web's 65%-wide round blob; aspect-square keeps it circular.
       className="absolute aspect-square rounded-full"
-      style={[{ width: "65%", top: spec.top as `${number}%`, left: spec.left as `${number}%` }, style]}
+      style={[
+        { width: "65%", top: spec.top as `${number}%`, left: spec.left as `${number}%` },
+        style,
+      ]}
     />
   );
 }

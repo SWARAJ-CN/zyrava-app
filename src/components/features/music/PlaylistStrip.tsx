@@ -14,7 +14,7 @@ import { searchPlaylists } from "@/lib/saavn";
  */
 export function PlaylistStrip({ query, onOpen }: { query: string; onOpen: () => void }) {
   const [playlists, setPlaylists] = useState<
-    Array<{ id: string; title: string; image: string; songCount: number }>
+    { id: string; title: string; image: string; songCount: number }[]
   >([]);
   const [loading, setLoading] = useState(true);
 
@@ -45,7 +45,10 @@ export function PlaylistStrip({ query, onOpen }: { query: string; onOpen: () => 
   return (
     <View className="mt-5">
       <View className="flex-row items-center justify-between gap-3 pb-2.5">
-        <Text numberOfLines={1} className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
+        <Text
+          numberOfLines={1}
+          className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted"
+        >
           Playlists for “{query}”
         </Text>
         <Pressable
@@ -53,7 +56,9 @@ export function PlaylistStrip({ query, onOpen }: { query: string; onOpen: () => 
           onPress={onOpen}
           className="transition-colors active:opacity-70"
         >
-          <Text className="text-[11px] font-medium text-muted active:text-foreground">See all →</Text>
+          <Text className="text-[11px] font-medium text-muted active:text-foreground">
+            See all →
+          </Text>
         </Pressable>
       </View>
 
@@ -95,7 +100,10 @@ export function PlaylistStrip({ query, onOpen }: { query: string; onOpen: () => 
                     {playlist.songCount}
                   </Text>
                 </View>
-                <Text numberOfLines={1} className="mt-1.5 block truncate text-[11px] font-semibold text-foreground">
+                <Text
+                  numberOfLines={1}
+                  className="mt-1.5 block truncate text-[11px] font-semibold text-foreground"
+                >
                   {playlist.title}
                 </Text>
               </Pressable>

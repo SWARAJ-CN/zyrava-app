@@ -1,6 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { AccessibilityInfo } from "react-native";
-import { Pressable, Text, View } from "react-native";
+import { AccessibilityInfo, Pressable, Text, View } from "react-native";
 import { ScrollView, type ScrollViewInstance } from "react-native";
 import { Icon } from "@/components/ui/icons";
 import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
@@ -9,7 +8,6 @@ import {
   formatSeconds,
   type LyricLine,
   type LyricsBody,
-  type LyricsMatch,
   type LyricsResult,
 } from "@/lib/lyrics";
 import { lookupLyrics } from "@/lib/lrclib";
@@ -328,6 +326,7 @@ const LyricsRows = memo(function LyricsRows({
       <ScrollView
         className="mt-2 min-h-0 flex-1"
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
         contentContainerStyle={{ paddingBottom: 8, gap: 14 }}
       >
         {body.stanzas.map((stanza, index) => (
@@ -352,6 +351,7 @@ const LyricsRows = memo(function LyricsRows({
         ref={boxRef}
         className="min-h-0 flex-1"
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
         contentContainerStyle={{ paddingBottom: 8, gap: 2 }}
         onTouchStart={armHold}
         onScrollBeginDrag={armHold}
@@ -440,9 +440,7 @@ export function LyricsPanel({ song }: { song: Song }) {
       });
       inflight.set(song.id, running);
       // The cleanup chain must not become a second, unhandled rejection.
-      void running
-        .catch(() => undefined)
-        .finally(() => inflight.delete(song.id));
+      void running.catch(() => undefined).finally(() => inflight.delete(song.id));
     }
 
     let alive = true;

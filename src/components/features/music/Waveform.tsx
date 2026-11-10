@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import Svg, { Rect } from "react-native-svg";
-import Animated, { useAnimatedProps, useSharedValue } from "react-native-reanimated";
+import Animated, {
+  useAnimatedProps,
+  useSharedValue,
+  type SharedValue,
+} from "react-native-reanimated";
 import type { AnalyserNode } from "react-native-audio-api";
 import { cn } from "@/lib/cn";
 
@@ -12,8 +16,8 @@ import { cn } from "@/lib/cn";
  * Same maths: log-spaced FFT bin bands, pow(x, 0.8) spike taming, 0.55 rise /
  * 0.16 fall smoothing, calm sine idle drift when there is nothing to sample,
  * and the rAF loop still reads getByteFrequencyData without React state —
- * heights ride SharedValues and each bar's geometry is applied by a UI-thread
- * animatedProps, so 60 fps visuals still cost nothing per tile.
+ * heights ride a SharedValue and each bar's geometry is applied by a
+ * UI-thread animatedProps, so 60 fps visuals still cost nothing per tile.
  *
  * The canvas DPR scaling and ResizeObserver are gone: SVG is vector (no pixel
  * ratio to multiply) and the parent's onLayout reports the same size changes.
@@ -43,10 +47,15 @@ interface Layout {
   bars: number;
 }
 
-function Bar({ index, heights, layout, color }: {
+function Bar({
+  index,
+  heights,
+  layout,
+  color,
+}: {
   index: number;
-  heights: ReturnType<typeof useSharedValue<number[]>>;
-  layout: ReturnType<typeof useSharedValue<Layout>>;
+  heights: SharedValue<number[]>;
+  layout: SharedValue<Layout>;
   color: string;
 }) {
   const animatedProps = useAnimatedProps(() => {
@@ -70,11 +79,14 @@ function Bar({ index, heights, layout, color }: {
 
 export function Waveform({ getAnalyser, active, className, density = 7, color }: WaveformProps) {
   const accent = useCSSVariable("var(--accent)");
-  const fill =
-    color ?? (typeof accent === "string" && accent ? accent : "#10b981");
+  const fill = color ?? (typeof accent === "string" && accent ? accent : "#10b981");
 
   const activeRef = useRef(active);
   const getAnalyserRef = useRef(getAnalyser);
+  /** Same numbers in two seats: a ref for this thread's loop, a shared value
+   *  for the UI-thread bar maths (Reanimated forbids cross-thread mutation
+   *  of values that live in effect closures). */
+  const sizeRef = useRef<Layout>({ width: 0, height: 0, bars: 3 });
   const layout = useSharedValue<Layout>({ width: 0, height: 0, bars: 3 });
   const heights = useSharedValue<number[]>([]);
   const [bars, setBars] = useState(3);
@@ -103,7 +115,7 @@ export function Waveform({ getAnalyser, active, className, density = 7, color }:
         data = bufferRef.data;
       }
 
-      const count = layoutRef.current.bars;
+      const count = sizeRef.current.bars;
       const next = smoothed.slice(0, count);
       while (next.length < count) next.push(0.1);
 
@@ -113,10 +125,7 @@ export function Waveform({ getAnalyser, active, className, density = 7, color }:
           // Log-ish mapping: treat bins as power-of-two bands so each bar gets
           // its share of the spectrum instead of thin slices of silence.
           const from = Math.floor(Math.pow(data.length, index / count));
-          const to = Math.max(
-            from + 1,
-            Math.floor(Math.pow(data.length, (index + 1) / count))
-          );
+          const to = Math.max(from + 1, Math.floor(Math.pow(data.length, (index + 1) / count)));
           let sum = 0;
           for (let bin = from; bin < to && bin < data.length; bin += 1) sum += data[bin];
           const average = sum / (to - from);
@@ -141,18 +150,24 @@ export function Waveform({ getAnalyser, active, className, density = 7, color }:
     return () => {
       running = false;
     };
-  }, [density, heights, layout]);
+
+    // The loop touches only stable shared values; the rAF chain survives
+    // width changes like the canvas did.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [density]);
 
   return (
     <View
-      aria-hidden
       accessibilityElementsHidden
       className={cn("h-full w-full", className)}
       onLayout={(event) => {
         const { width, height } = event.nativeEvent.layout;
         if (width === 0 || height === 0) return;
         // ResizeObserver → onLayout; DPR scaling skipped (vector output).
-        layout.value = { width, height, bars };
+        const next = { width, height, bars: Math.max(3, Math.floor(width / density)) };
+        sizeRef.current = next;
+        layout.value = next;
+        setBars((previous) => (previous === next.bars ? previous : next.bars));
       }}
     >
       <Svg width="100%" height="100%">

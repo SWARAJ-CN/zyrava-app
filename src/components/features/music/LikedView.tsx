@@ -86,9 +86,7 @@ export function LikedView() {
           disabled={!liked.length || allSaved || saving !== null}
           active={allSaved}
           label={
-            allSaved
-              ? "Every liked song is on this device"
-              : "Keep every liked song on this device"
+            allSaved ? "Every liked song is on this device" : "Keep every liked song on this device"
           }
         >
           <Icon
@@ -102,17 +100,15 @@ export function LikedView() {
         <View className="mt-3 rounded-xl border border-separator bg-surface px-3 py-2.5">
           <View className="flex-row items-center justify-between gap-3">
             <Text className="text-[11px] text-muted">
-              Saving song {Math.min(saving.done + 1, saving.total)} of {saving.total} on this
-              device
+              Saving song {Math.min(saving.done + 1, saving.total)} of {saving.total} on this device
             </Text>
-            <Text className="text-[11px] font-semibold tabular-nums text-foreground">{percent}%</Text>
+            <Text className="text-[11px] font-semibold tabular-nums text-foreground">
+              {percent}%
+            </Text>
           </View>
           {/* Width-percentage bar — RN accepts the same % string the web used. */}
           <View className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-secondary">
-            <View
-              className="h-full rounded-full bg-accent"
-              style={{ width: `${percent}%` }}
-            />
+            <View className="h-full rounded-full bg-accent" style={{ width: `${percent}%` }} />
           </View>
         </View>
       ) : null}

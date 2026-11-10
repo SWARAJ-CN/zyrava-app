@@ -6,7 +6,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Slider } from "heroui-native";
 import { cn } from "@/lib/cn";
 import { Icon } from "@/components/ui/icons";
-import { Button } from "@/components/ui/Button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Waveform } from "@/components/features/music/Waveform";
 import {
@@ -50,8 +49,7 @@ function sliderValue(value: number | number[]): number {
  * ------------------------------------------------------------------ */
 
 /** Shared chrome for every console panel. */
-const PANEL =
-  "rounded-2xl border border-white/[0.08] bg-white/[0.025]";
+const PANEL = "rounded-2xl border border-white/[0.08] bg-white/[0.025]";
 
 /** oklch(0.85 0.16 170) — the console's signal green. */
 const SIGNAL = "#2fefbe";
@@ -189,10 +187,7 @@ export function MixerConsole() {
       />
       <View className="flex-row flex-none items-center gap-x-3 gap-y-2 border-b border-white/[0.06] bg-[#05070b]/85 px-3 py-3">
         <View
-          className={cn(
-            "size-2 flex-none rounded-full",
-            playing ? "bg-[#5fd37f]" : "bg-white/25"
-          )}
+          className={cn("size-2 flex-none rounded-full", playing ? "bg-[#5fd37f]" : "bg-white/25")}
         />
         <Text className="text-[10px] font-black uppercase tracking-[0.18em] text-white/80">
           Sound console
@@ -231,7 +226,12 @@ export function MixerConsole() {
       <ScrollView
         className="min-h-0 flex-1"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 12, paddingTop: 16, paddingBottom: 40, gap: 16 }}
+        contentContainerStyle={{
+          paddingHorizontal: 12,
+          paddingTop: 16,
+          paddingBottom: 40,
+          gap: 16,
+        }}
       >
         {/* ── Deck: artwork, VFD readout, transport ── */}
         <View className={cn(PANEL, "p-4")}>
@@ -250,7 +250,10 @@ export function MixerConsole() {
               )}
             </View>
             <View className="min-w-0 flex-1">
-              <Text numberOfLines={1} className="truncate text-[10px] font-bold uppercase tracking-[0.25em] text-white/40">
+              <Text
+                numberOfLines={1}
+                className="truncate text-[10px] font-bold uppercase tracking-[0.25em] text-white/40"
+              >
                 {queueLabel || "Deck A"} · {index + 1}/{queue.length || 0}
               </Text>
               {/* VFD track name */}
@@ -292,7 +295,9 @@ export function MixerConsole() {
               {/* Ticker progress — tap anywhere on the bar to seek */}
               <View className="mt-3">
                 <View className="flex-row items-center justify-between">
-                  <Text className="font-mono text-[10px] tabular-nums text-white/45">{fmt(progress)}</Text>
+                  <Text className="font-mono text-[10px] tabular-nums text-white/45">
+                    {fmt(progress)}
+                  </Text>
                   <BpmChip getAnalyser={getAnalyser} active={playing} />
                   <Text className="font-mono text-[10px] tabular-nums text-white/45">
                     -{fmt(Math.max(0, duration - progress))}
@@ -337,7 +342,14 @@ export function MixerConsole() {
             >
               <LinearGradient
                 colors={["#84f8d2", "#13c097"]}
-                style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, borderRadius: 12 }}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  borderRadius: 12,
+                }}
               />
               <Icon name={playing ? "pause" : "play"} size={22} className="fill-black text-black" />
             </Pressable>
@@ -367,7 +379,10 @@ export function MixerConsole() {
                 shuffle ? "bg-[#3ad4aa]/15" : "bg-white/[0.07] active:bg-white/[0.14]"
               )}
             >
-              <Icon name="shuffle" className={cn("size-4", shuffle ? "text-[#2fefbe]" : "text-white/75")} />
+              <Icon
+                name="shuffle"
+                className={cn("size-4", shuffle ? "text-[#2fefbe]" : "text-white/75")}
+              />
             </Pressable>
             <Pressable
               accessibilityRole="button"
@@ -679,7 +694,10 @@ export function MixerConsole() {
                                     ? "volume-1"
                                     : "activity"
                       }
-                      className={cn("size-4", padGlow === pad.name ? "text-[#3bf5c4]" : "text-white/55")}
+                      className={cn(
+                        "size-4",
+                        padGlow === pad.name ? "text-[#3bf5c4]" : "text-white/55"
+                      )}
                     />
                     <Text
                       className={cn(
@@ -702,7 +720,11 @@ export function MixerConsole() {
             <Text className="pb-2 text-[10px] font-bold uppercase tracking-[0.3em] text-white/40">
               Queue control · {queue.length} tracks {shuffle ? "· shuffled" : ""}
             </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingBottom: 4 }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 6, paddingBottom: 4 }}
+            >
               {queue.map((song: Song, position: number) => (
                 <Pressable
                   key={`${song.id}-${position}`}
@@ -799,10 +821,7 @@ export function MixerConsole() {
                   )}
                 >
                   <View
-                    className={cn(
-                      "h-2 w-2 rounded-full",
-                      engaged ? "bg-[#2fefbe]" : "bg-white/20"
-                    )}
+                    className={cn("h-2 w-2 rounded-full", engaged ? "bg-[#2fefbe]" : "bg-white/20")}
                   />
                   <Text
                     className={cn(
@@ -830,9 +849,7 @@ export function MixerConsole() {
         destructive
         onCancel={() => setHeavyPending(null)}
         onConfirm={() => {
-          applyPreset(
-            EQ_PRESETS.find((preset) => preset.label === heavyPending) ?? EQ_PRESETS[0]
-          );
+          applyPreset(EQ_PRESETS.find((preset) => preset.label === heavyPending) ?? EQ_PRESETS[0]);
           setHeavyPending(null);
         }}
       />
@@ -873,7 +890,10 @@ function TickerBar({
       className="mt-1 w-full"
     >
       {/* The rail grows under the finger — the web's group-hover:h-2.5. */}
-      <View className="overflow-hidden rounded-full bg-black/40" style={{ height: pressed ? 10 : 6 }}>
+      <View
+        className="overflow-hidden rounded-full bg-black/40"
+        style={{ height: pressed ? 10 : 6 }}
+      >
         <View
           className="h-full rounded-full"
           style={{
@@ -887,7 +907,7 @@ function TickerBar({
 }
 
 /* ------------------------------------------------------------------ *
- * SwitchChip — one backlit utility switch.                             *
+ * SwitchChip — one backlit utility switch.     *
  * ------------------------------------------------------------------ */
 function SwitchChip({
   label,
@@ -908,15 +928,12 @@ function SwitchChip({
       onPress={onClick}
       className={cn(
         "flex-row items-center gap-1.5 rounded border px-2.5 py-1.5",
-        engaged ? "border-[#3ad4aa]/60 bg-[#3ad4aa]/[0.12]" : "border-white/10 bg-black/25 active:border-white/25"
+        engaged
+          ? "border-[#3ad4aa]/60 bg-[#3ad4aa]/[0.12]"
+          : "border-white/10 bg-black/25 active:border-white/25"
       )}
     >
-      <View
-        className={cn(
-          "size-1.5 rounded-full",
-          engaged ? "bg-[#2fefbe]" : "bg-white/20"
-        )}
-      />
+      <View className={cn("size-1.5 rounded-full", engaged ? "bg-[#2fefbe]" : "bg-white/20")} />
       <Text
         className={cn(
           "text-[10px] font-bold uppercase tracking-wider",
@@ -930,7 +947,7 @@ function SwitchChip({
 }
 
 /* ------------------------------------------------------------------ *
- * FxRow — one wet-send row in the FX rack.                             *
+ * FxRow — one wet-send row in the FX rack.     *
  * ------------------------------------------------------------------ */
 function FxRow({
   name,
@@ -1047,7 +1064,10 @@ function BpmChip({
     const finalize = setInterval(() => {
       if (beats.length >= 4) {
         // Median interval between impulses → BPM, folded into 70–180.
-        const gaps = beats.slice(1).map((time, i) => time - beats[i]).sort((a, b) => a - b);
+        const gaps = beats
+          .slice(1)
+          .map((time, i) => time - beats[i])
+          .sort((a, b) => a - b);
         const median = gaps[gaps.length >> 1];
         let value = 60000 / median;
         while (value < 70) value *= 2;
@@ -1093,15 +1113,9 @@ function BpmChip({
 }
 
 /* ------------------------------------------------------------------ *
- * VU bridge — stereo LED segments fed live from the meter taps.        *
+ * VU bridge — stereo LED segments fed live from the meter taps.*
  * ------------------------------------------------------------------ */
-function VUMeter({
-  getLevels,
-  active,
-}: {
-  getLevels: () => [number, number];
-  active: boolean;
-}) {
+function VUMeter({ getLevels, active }: { getLevels: () => [number, number]; active: boolean }) {
   const [meter, setMeter] = useState<{
     levels: [number, number];
     peaks: [number, number];
@@ -1134,14 +1148,10 @@ function VUMeter({
       const [l, r] = getLevels();
       // Clip catch: hold the red lamp 2.5s after the last overload.
       const peakRms = Math.max(l, r);
-      clipHoldRef.current = Math.min(
-        clipHoldRef.current + (peakRms > 0.92 ? 1 : -0.016),
-        1
-      );
+      clipHoldRef.current = Math.min(clipHoldRef.current + (peakRms > 0.92 ? 1 : -0.016), 1);
       setClip(clipHoldRef.current > 0.2);
       // dB-ish scale: half-RootSquare mapping; 0.28 RMS ~ near full swing.
-      const toMeter = (rms: number) =>
-        Math.min(1, Math.max(0, (Math.sqrt(rms) - 0.05) / 0.45));
+      const toMeter = (rms: number) => Math.min(1, Math.max(0, (Math.sqrt(rms) - 0.05) / 0.45));
       const raw: [number, number] = [toMeter(l), toMeter(r)];
       smoothRef[0] += (raw[0] - smoothRef[0]) * (smoothRef[0] < raw[0] ? 0.5 : 0.12);
       smoothRef[1] += (raw[1] - smoothRef[1]) * (smoothRef[1] < raw[1] ? 0.5 : 0.12);
@@ -1150,10 +1160,7 @@ function VUMeter({
       setMeter({
         levels: [smoothRef[0], smoothRef[1]],
         peaks: [peaksRef[0], peaksRef[1]],
-        db: [
-          l > 1e-4 ? 20 * Math.log10(l) : -Infinity,
-          r > 1e-4 ? 20 * Math.log10(r) : -Infinity,
-        ],
+        db: [l > 1e-4 ? 20 * Math.log10(l) : -Infinity, r > 1e-4 ? 20 * Math.log10(r) : -Infinity],
       });
       frame = requestAnimationFrame(loop);
     }
@@ -1163,12 +1170,7 @@ function VUMeter({
   return (
     <View className="flex-col items-center gap-1.5">
       {/* Clip lamp — lights red and holds for a beat after an overload */}
-      <View
-        className={cn(
-          "rounded px-1.5 py-0.5",
-          clip ? "bg-[#f4514f]" : "bg-white/10"
-        )}
-      >
+      <View className={cn("rounded px-1.5 py-0.5", clip ? "bg-[#f4514f]" : "bg-white/10")}>
         <Text
           className={cn(
             "font-mono text-[8px] font-black uppercase tracking-widest",
@@ -1188,7 +1190,10 @@ function VUMeter({
                 : meter.db[channel].toFixed(1).padStart(4, " ")}
               <Text className="text-white/30"> dB</Text>
             </Text>
-            <View className="relative w-5 flex-col-reverse gap-[2px] rounded bg-black/50 p-1" style={{ height: 14 * 8 }}>
+            <View
+              className="relative w-5 flex-col-reverse gap-[2px] rounded bg-black/50 p-1"
+              style={{ height: 14 * 8 }}
+            >
               {Array.from({ length: 14 }).map((_, segment) => {
                 const lit = meter.levels[channel] * 14 > segment;
                 const green = segment < 8;
@@ -1231,7 +1236,10 @@ function VUMeter({
  * sweep sensitivity, same clamp/step rounding, double-tap = reset (the web's
  * double-click). Wheel + arrow-key handling is pointer/keyboard-only —
  * dropped.
- * ------------------------------------------------------------------ */
+ *
+ * PanResponder predates React Compiler: its handlers execute in the touch
+ * phase, so the ref/purity rules cannot read this pattern correctly. */
+/* eslint-disable react-hooks/refs, react-hooks/purity */
 const SWEEP_START = -135;
 const SWEEP = 270;
 
@@ -1267,15 +1275,13 @@ function Knob({
     latest.current = { value, min, max, step, onChange, resetValue };
   }, [value, min, max, step, onChange, resetValue]);
 
-  const clamp = useCallback(
-    (next: number) => {
-      const { min: lo, max: hi, step: st } = latest.current;
-      const rounded = Math.round(next / st) * st;
-      return Math.min(hi, Math.max(lo, Number(rounded.toFixed(4))));
-    },
-    []
-  );
+  const clamp = useCallback((next: number) => {
+    const { min: lo, max: hi, step: st } = latest.current;
+    const rounded = Math.round(next / st) * st;
+    return Math.min(hi, Math.max(lo, Number(rounded.toFixed(4))));
+  }, []);
 
+  /* Created once lazily — the web attached its window listeners at mount. */
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -1428,6 +1434,7 @@ function FaderStrip({
     onChangeRef.current(Number(rounded.toFixed(2)));
   };
 
+  /* Created once lazily — the web attached its window listeners at mount. */
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -1531,9 +1538,7 @@ function EqPresetMenu({ value, onPick }: { value: string; onPick: (label: string
         onPress={() => setOpen((v) => !v)}
         className="flex h-9 flex-row items-center justify-between rounded-lg border border-white/10 bg-black/35 px-2.5 active:border-white/25"
       >
-        <Text className="text-[10px] font-bold uppercase tracking-wider text-white/35">
-          Preset
-        </Text>
+        <Text className="text-[10px] font-bold uppercase tracking-wider text-white/35">Preset</Text>
         <Text className="font-semibold text-white/80" numberOfLines={1}>
           {value}
         </Text>
@@ -1571,3 +1576,4 @@ function fmt(seconds: number): string {
   const minutes = Math.floor(total / 60);
   return `${minutes}:${String(total % 60).padStart(2, "0")}`;
 }
+/* eslint-enable react-hooks/refs, react-hooks/purity */

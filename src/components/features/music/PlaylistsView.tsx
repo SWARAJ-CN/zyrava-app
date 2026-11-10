@@ -9,8 +9,7 @@ import { useLibrary } from "@/components/providers/LibraryProvider";
 import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
 import { useToast } from "@/components/providers/ToastProvider";
 import { cn } from "@/lib/cn";
-import { getPlaylistDetail, searchPlaylists, type PlaylistSummary } from "@/lib/saavn";
-import type { Song } from "@/lib/saavn";
+import { getPlaylistDetail, searchPlaylists, type PlaylistSummary, Song } from "@/lib/saavn";
 
 type ApiPlaylist = PlaylistSummary;
 
@@ -149,9 +148,8 @@ export function PlaylistsView({ query }: { query: string }) {
             Your mixes & the catalogue
           </Text>
           <Text className="mt-1 text-sm text-muted">
-            Catalogue playlists for{" "}
-            <Text className="font-medium text-foreground">“{query}”</Text>, plus every playlist you
-            have built here.
+            Catalogue playlists for <Text className="font-medium text-foreground">“{query}”</Text>,
+            plus every playlist you have built here.
           </Text>
         </View>
         <ClickButton
@@ -186,7 +184,11 @@ export function PlaylistsView({ query }: { query: string }) {
                 accessibilityLabel="Playlist name"
                 className="h-10 min-w-0 flex-1 rounded-lg border border-separator bg-surface-secondary/50 px-3 text-foreground placeholder:text-faint-foreground"
               />
-              <ClickButton square onClick={submitNew} className="h-10 px-4 text-[12px] font-semibold">
+              <ClickButton
+                square
+                onClick={submitNew}
+                className="h-10 px-4 text-[12px] font-semibold"
+              >
                 Create
               </ClickButton>
             </View>
@@ -239,7 +241,10 @@ export function PlaylistsView({ query }: { query: string }) {
                       <Icon name="play" size={15} className="fill-current" />
                     </View>
                   </View>
-                  <Text numberOfLines={1} className="mt-2 block truncate text-sm font-semibold text-foreground">
+                  <Text
+                    numberOfLines={1}
+                    className="mt-2 block truncate text-sm font-semibold text-foreground"
+                  >
                     {playlist.name}
                   </Text>
                 </Pressable>
@@ -318,7 +323,10 @@ export function PlaylistsView({ query }: { query: string }) {
                     </Text>
                   </View>
                 </View>
-                <Text numberOfLines={1} className="mt-2 block truncate text-sm font-semibold text-foreground">
+                <Text
+                  numberOfLines={1}
+                  className="mt-2 block truncate text-sm font-semibold text-foreground"
+                >
                   {playlist.title}
                 </Text>
                 <Text numberOfLines={1} className="block truncate text-[11px] text-muted">
@@ -389,7 +397,10 @@ export function PlaylistsView({ query }: { query: string }) {
             </CollectionHero>
 
             <ScrollView
-              className={cn("min-h-0 flex-1 p-2 sm:p-3", !detail && "items-center justify-center py-16")}
+              className={cn(
+                "min-h-0 flex-1 p-2 sm:p-3",
+                !detail && "items-center justify-center py-16"
+              )}
               showsVerticalScrollIndicator={false}
             >
               {detail ? (

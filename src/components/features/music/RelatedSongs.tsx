@@ -59,7 +59,7 @@ async function fetchRelated(song: Song, taste: Set<string>): Promise<RelatedPick
  */
 export function RelatedSongs({ song }: { song: Song }) {
   const { startQueue } = useMusicPlayer();
-  const { liked, playlists, toggleLike } = useLibrary();
+  const { liked, playlists } = useLibrary();
 
   /* The cache answers while a run is fresh; state only carries what an
    * in-flight request lands with, so switching seeds never needs a reset
@@ -73,10 +73,7 @@ export function RelatedSongs({ song }: { song: Song }) {
 
     let running = inflight.get(song.id);
     if (!running) {
-      const taste = tasteProfile([
-        ...liked,
-        ...playlists.flatMap((playlist) => playlist.songs),
-      ]);
+      const taste = tasteProfile([...liked, ...playlists.flatMap((playlist) => playlist.songs)]);
       running = fetchRelated(song, taste).then((ranked) => {
         // Empty stays uncached, so a hiccup on one search is retried later.
         if (ranked.length) store.set(song.id, { at: Date.now(), picks: ranked });
@@ -84,9 +81,7 @@ export function RelatedSongs({ song }: { song: Song }) {
       });
       inflight.set(song.id, running);
       // The cleanup chain must not become a second, unhandled rejection.
-      void running
-        .catch(() => undefined)
-        .finally(() => inflight.delete(song.id));
+      void running.catch(() => undefined).finally(() => inflight.delete(song.id));
     }
 
     let alive = true;
@@ -133,6 +128,7 @@ export function RelatedSongs({ song }: { song: Song }) {
       <ScrollView
         className="mt-2 min-h-0 flex-1"
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
         contentContainerStyle={{ paddingBottom: 4 }}
       >
         {loading ? (
@@ -215,7 +211,10 @@ function PickRow({
           </View>
         </View>
         <View className="min-w-0 flex-1">
-          <Text numberOfLines={1} className="block truncate text-[13px] font-semibold text-foreground">
+          <Text
+            numberOfLines={1}
+            className="block truncate text-[13px] font-semibold text-foreground"
+          >
             {pick.song.title}
           </Text>
           <Text numberOfLines={1} className="block truncate text-[11px] text-muted">

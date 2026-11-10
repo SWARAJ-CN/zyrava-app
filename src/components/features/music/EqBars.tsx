@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
-import { AccessibilityInfo } from "react-native";
+import { AccessibilityInfo, View } from "react-native";
 import { useCSSVariable } from "uniwind";
-import { View } from "react-native";
 import Animated, {
   Easing,
   useAnimatedStyle,

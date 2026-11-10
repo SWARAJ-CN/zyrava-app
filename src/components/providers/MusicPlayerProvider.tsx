@@ -470,6 +470,22 @@ interface MusicPlayerValue {
 
 const MusicPlayerContext = createContext<MusicPlayerValue | null>(null);
 
+/*
+ * Native engine context — one per provider lifetime. The web graph was
+ * created lazily for CORS reasons and torn down on iOS backgrounding; on
+ * device the OS audio session keeps the graph alive across navigation, so
+ * the provider simply owns this singleton. Re-acquired if the provider is
+ * ever remounted.
+ */
+let sharedContext: AudioContext | null = null;
+function acquireContext(): AudioContext {
+  if (!sharedContext) sharedContext = new AudioContext();
+  return sharedContext;
+}
+function releaseContext(): void {
+  sharedContext = null;
+}
+
 /**
  * Renders inside the `<Audio>` tag so the provider can read the native
  * element's `duration`/`ready` (the tag exposes them through context).
@@ -512,7 +528,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   /** The user's own ten-band curve, saved separately from the factory presets. */
   const [customEqGains, setCustomEqGains] = useState<number[]>([...EQ_PRESETS[0].gains]);
   const [spatialMode, setSpatialModeState] = useState<SpatialMode>("off");
-  const [visualizerReady, setVisualizerReady] = useState(false);
+  /* Native truth: the graph (and its analyser tap) is live from the first
+     frame — no CORS probe gates it, unlike the web's lazy upgrade path. */
+  const [visualizerReady, setVisualizerReady] = useState(true);
   const [nowPlayingOpen, setNowPlayingOpenState] = useState(false);
 
   /* Studio mixer values — refs mirror them so the graph reads the freshest
@@ -598,11 +616,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   /** The one graph context — native audio has no gesture gate, so it is
    *  created at mount (the web built it lazily only for CORS reasons). */
-  const audioContextRef = useRef<AudioContext | null>(null);
-  if (audioContextRef.current === null) {
-    audioContextRef.current = new AudioContext();
-  }
-  const context = audioContextRef.current;
+  const [context] = useState<AudioContext>(acquireContext);
 
   const analyserRef = useRef<RnAnalyserNode | null>(null);
   const filtersRef = useRef<BiquadFilterNode[]>([]);
@@ -682,7 +696,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
    * natively: splitter/merger/panner/LFO/biquad/delay).
    */
   const applySpatial = useCallback(() => {
-    const ctx = audioContextRef.current;
+    const ctx = context;
     const input = spaceInRef.current;
     const output = spaceOutRef.current;
     if (!ctx || !input || !output) return;
@@ -988,7 +1002,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
    * policy to the web graph.
    */
   const applyFX = useCallback(() => {
-    const ctx = audioContextRef.current;
+    const ctx = context;
     if (!ctx) return;
     const glide = (param: RnAudioParam | ParamShim, value: number, tc = 0.04) =>
       param.setTargetAtTime(value, ctx.currentTime, tc);
@@ -1063,7 +1077,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   /** Picks the head's route — light path until the rack earns its place. */
   const applyRouting = useCallback(() => {
-    const ctx = audioContextRef.current;
+    const ctx = context;
     const head = loCutNodeRef.current;
     if (!ctx || !head) return;
     const eqOn = eqGainsRef.current.some((gain) => gain !== 0);
@@ -1099,7 +1113,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
    */
   const ensureGraph = useCallback((): RnAnalyserNode | null => {
     const handle = audioRef.current;
-    const ctx = audioContextRef.current;
+    const ctx = context;
     if (!ctx) return null;
     if (analyserRef.current) return analyserRef.current;
     if (!handle) return null;
@@ -1200,7 +1214,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
    * djOut. Identical values to the web rack.
    */
   const ensureRack = useCallback((): boolean => {
-    const ctx = audioContextRef.current;
+    const ctx = context;
     if (!ctx) return false;
     if (rackReadyRef.current) return true;
     if (rackBuildingRef.current) return false;
@@ -1445,8 +1459,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void AudioManager.setAudioSessionActivity(true).catch(() => undefined);
     AudioManager.observeAudioInterruptions(true);
-    const analyser = ensureGraph();
-    setVisualizerReady(Boolean(analyser));
+    ensureGraph();
     return () => {
       spatialCleanupRef.current();
     };
@@ -1477,7 +1490,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       recoveryRef.current = null;
       const handle = audioRef.current;
       if (!handle || !shouldPlayRef.current || userPausedRef.current) return;
-      void audioContextRef.current?.resume().catch(() => undefined);
+      void context.resume().catch(() => undefined);
       if (!pausedRef.current) {
         attemptsRef.current = 0;
         return;
@@ -1525,7 +1538,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     const sub = AppState.addEventListener("change", (state) => {
       visibilityRef.current = state;
       if (state === "active") {
-        void audioContextRef.current?.resume().catch(() => undefined);
+        void context.resume().catch(() => undefined);
         recoverPlayback();
       }
     });
@@ -1582,10 +1595,16 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     if (!current) return;
     let cancelled = false;
 
+    /* The track-switch reset lands in the same commit — the web's loader
+       effect did exactly this synchronously (progress back to 0 the instant
+       the new song is current, before any position event can arrive). */
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setProgress(0);
     positionRef.current = 0;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setDuration(current.duration || 0);
     durationRef.current = current.duration || 0;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setPlayerError(null);
     endedRef.current = false;
     streamFailuresRef.current = 0;
@@ -1942,8 +1961,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         handle.pause();
         handle.setVolume(0);
       }
-      void audioContextRef.current?.close().catch(() => undefined);
-      audioContextRef.current = null;
+      void context.close().catch(() => undefined);
+      releaseContext();
       analyserRef.current = null;
       mediaSourceRef.current = null;
     },
@@ -1958,7 +1977,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       userPausedRef.current = false;
       endedRef.current = false;
       clearRecovery();
-      void audioContextRef.current?.resume().catch(() => undefined);
+      void context.resume().catch(() => undefined);
       handle.play();
     } else {
       userPausedRef.current = true;
@@ -2054,7 +2073,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   /** Live graph facts — the dashboard reads these on render. */
   const getGraphInfo = useCallback(() => {
-    const ctx = audioContextRef.current;
+    const ctx = context;
     return {
       webAudio: ctx !== null,
       sampleRate: ctx?.sampleRate ?? null,
@@ -2149,7 +2168,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   /** One-tap party pad — synthesized straight on the audio context. */
   const playPad = useCallback((name: PadName) => {
-    const ctx = audioContextRef.current;
+    const ctx = context;
     if (!ctx) return;
     let bus = padBusRef.current;
     if (!bus) {

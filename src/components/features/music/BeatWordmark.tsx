@@ -1,10 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { View } from "react-native";
-import { AccessibilityInfo } from "react-native";
-import Animated, {
-  useAnimatedStyle,
-  useSharedValue,
-} from "react-native-reanimated";
+import { View, AccessibilityInfo } from "react-native";
+import Animated, { useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import type { AnalyserNode } from "react-native-audio-api";
 import { cn } from "@/lib/cn";
 
@@ -120,10 +116,7 @@ export function BeatWordmark({
       const bass = analyser && playing ? readBass(analyser) : 0;
       if (reference < 0) reference = bass;
       reference += (bass - reference) * FOLLOW;
-      const pulse = Math.min(
-        1,
-        Math.max(0, (bass - reference * 1.1) / (reference * 0.9 + 0.06))
-      );
+      const pulse = Math.min(1, Math.max(0, (bass - reference * 1.1) / (reference * 0.9 + 0.06)));
       level = pulse > level ? level + (pulse - level) * ATTACK : level + (pulse - level) * RELEASE;
       fill.value = level;
       hue.value = (hueSeed + time * DRIFT) % 360;

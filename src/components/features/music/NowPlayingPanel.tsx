@@ -3,10 +3,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { cn } from "@/lib/cn";
 import { Icon } from "@/components/ui/icons";
 import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
-import {
-  NowPlayingTabs,
-  useNowPlayingTab,
-} from "@/components/features/music/NowPlayingTabs";
+import { NowPlayingTabs, useNowPlayingTab } from "@/components/features/music/NowPlayingTabs";
 import { BeatGlow, songHueSeed } from "@/components/features/music/BeatGlow";
 import { EqBars } from "@/components/features/music/EqBars";
 
@@ -113,7 +110,10 @@ export function NowPlayingPanel() {
 
         {/* Song card — title, artist, album, position */}
         <View className="min-h-0 flex-1 flex-col pb-4 pt-4">
-          <Text numberOfLines={1} className="truncate text-2xl font-black tracking-tight text-foreground">
+          <Text
+            numberOfLines={1}
+            className="truncate text-2xl font-black tracking-tight text-foreground"
+          >
             {current.title}
           </Text>
           <Text numberOfLines={1} className="mt-1 truncate text-sm font-medium text-muted">
@@ -158,7 +158,10 @@ export function NowPlayingPanel() {
             >
               <Icon name={playing ? "pause" : "play"} size={18} className="fill-current" />
             </Pressable>
-            <Text numberOfLines={1} className="ml-auto truncate text-[11px] font-medium text-faint-foreground">
+            <Text
+              numberOfLines={1}
+              className="ml-auto truncate text-[11px] font-medium text-faint-foreground"
+            >
               ZYRAVA
             </Text>
           </View>

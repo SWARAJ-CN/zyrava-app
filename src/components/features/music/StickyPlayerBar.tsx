@@ -249,9 +249,7 @@ export function StickyPlayerBar() {
                 </Text>
                 <View className="flex-row flex-1 items-center gap-3">
                   {visualizerReady ? (
-                    <View className="h-4 w-24">
-                      {renderWave("h-full w-full", "text-brand")}
-                    </View>
+                    <View className="h-4 w-24">{renderWave("h-full w-full", "text-brand")}</View>
                   ) : null}
                   <Pressable
                     accessibilityRole="button"
@@ -385,7 +383,10 @@ export function StickyPlayerBar() {
                   {playing ? renderWave("absolute inset-0", "text-white") : null}
                 </View>
                 <View className="min-w-0 flex-1">
-                  <Text numberOfLines={1} className="truncate text-sm font-semibold text-foreground">
+                  <Text
+                    numberOfLines={1}
+                    className="truncate text-sm font-semibold text-foreground"
+                  >
                     {current.title}
                   </Text>
                   <Text numberOfLines={1} className="truncate text-xs text-muted">
@@ -447,9 +448,7 @@ export function StickyPlayerBar() {
                 onPress={() => setEqOpen((open) => !open)}
                 className={cn(
                   "flex h-9 flex-none items-center gap-1 rounded-full border px-2.5",
-                  eqChipActive
-                    ? "border-accent/40 bg-accent-soft"
-                    : "border-separator"
+                  eqChipActive ? "border-accent/40 bg-accent-soft" : "border-separator"
                 )}
               >
                 <Icon
@@ -471,7 +470,11 @@ export function StickyPlayerBar() {
                 onPress={() => setMuted(!muted)}
                 className="size-9 flex-none items-center justify-center rounded-full text-muted"
               >
-                {muted ? <Icon name="volume-x" className="size-4" /> : <Icon name="volume-2" className="size-4" />}
+                {muted ? (
+                  <Icon name="volume-x" className="size-4" />
+                ) : (
+                  <Icon name="volume-2" className="size-4" />
+                )}
               </Pressable>
               <Slider
                 value={[volume]}
@@ -510,9 +513,7 @@ export function StickyPlayerBar() {
         destructive
         onCancel={() => setHeavyPending(null)}
         onConfirm={() => {
-          applyPreset(
-            EQ_PRESETS.find((preset) => preset.label === heavyPending) ?? EQ_PRESETS[0]
-          );
+          applyPreset(EQ_PRESETS.find((preset) => preset.label === heavyPending) ?? EQ_PRESETS[0]);
           setHeavyPending(null);
         }}
       />
