@@ -632,8 +632,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   /** Stops LFOs / disconnects the current spatial chain. */
   const spatialCleanupRef = useRef<() => void>(() => {});
   const spatialModeRef = useRef<SpatialMode>(spatialMode);
-  /** The element's tap into the audio graph (created at most once). */
+  /** The element's tap into the audio graph (created per mounted element). */
   const mediaSourceRef = useRef<RnAudioNode | null>(null);
+  /** The `<Audio>` handle the tap was created from — element identity, so a
+   *  remount (endSession → new track) re-attaches instead of reusing a dead node. */
+  const elementRef = useRef<AudioTagHandle | null>(null);
   // Play intent is read at track-switch time; state would force the loader
   // effect to re-run on clicks.
   const shouldPlayRef = useRef(false);
@@ -1111,17 +1114,25 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     const handle = audioRef.current;
     const ctx = context;
     if (!ctx) return null;
-    if (analyserRef.current) return analyserRef.current;
     if (!handle) return null;
-    try {
-      let sourceNode: RnAudioNode;
-      if (mediaSourceRef.current) {
-        sourceNode = mediaSourceRef.current;
-      } else {
-        const mediaSource = ctx.createMediaElementSource(handle);
-        mediaSourceRef.current = mediaSource;
-        sourceNode = mediaSource;
+    // Already wired to this very element — nothing to do.
+    if (analyserRef.current && elementRef.current === handle) return analyserRef.current;
+    // The element remounted (source cleared between tracks): take the old
+    // tap out of the graph before the new handle claims its slot.
+    if (mediaSourceRef.current && elementRef.current !== handle) {
+      try {
+        mediaSourceRef.current.disconnect();
+      } catch {
+        /* already detached */
       }
+      mediaSourceRef.current = null;
+      analyserRef.current = null;
+    }
+    try {
+      const mediaSource = ctx.createMediaElementSource(handle);
+      mediaSourceRef.current = mediaSource;
+      elementRef.current = handle;
+      const sourceNode: RnAudioNode = mediaSource;
       const preamp = ctx.createGain();
       preamp.gain.value = Math.pow(10, preampDbRef.current / 20);
       const panNode = ctx.createStereoPanner();
@@ -1450,16 +1461,16 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     ensureRackRef.current = ensureRack;
   }, [ensureRack]);
 
-  /* Build the graph as soon as the media element has mounted (children
-     effects run before this one, so the handle ref is live). */
+  /* Native media session on for the whole app. The graph itself cannot be
+     wired yet — the media element only mounts once a track is armed (see the
+     source effect), keeping `<Audio>` away from an empty src. */
   useEffect(() => {
     void AudioManager.setAudioSessionActivity(true).catch(() => undefined);
     AudioManager.observeAudioInterruptions(true);
-    ensureGraph();
     return () => {
       spatialCleanupRef.current();
     };
-  }, [ensureGraph]);
+  }, []);
 
   /**
    * Native "background survival": a track paused without the user asking has
@@ -1645,13 +1656,15 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id]);
 
-  /* When a swapped-in source finishes loading, apply the rate + envelope and
-     play it if the listener wants it — the native answer to web's `arm()`. */
+  /* When a swapped-in source mounts/loads the element: wire the graph (the
+     handle only exists now), apply the rate + envelope and play it if the
+     listener wants it — the native answer to web's `arm()`. */
   const playPendingRef = useRef(false);
   useEffect(() => {
     if (!source) return;
     const handle = audioRef.current;
     if (!handle) return;
+    ensureGraph();
     handle.setPlaybackRate(rateRef.current);
     if (shouldPlayRef.current && !playPendingRef.current) {
       playPendingRef.current = true;
@@ -1659,7 +1672,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       // watchdog and the retry ladder take over from there.
       handle.play();
     }
-  }, [source]);
+  }, [source, ensureGraph]);
 
   /**
    * Re-resolves the active stream: a link that went stale mid-track gets a
@@ -2531,37 +2544,43 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   return (
     <MusicPlayerContext.Provider value={value}>
-      {/* The singleton media element — persists through navigation. The
-          children live inside the tag so the meta bridge can read duration. */}
-      <Audio
-        ref={audioRef}
-        source={source ?? ""}
-        context={context}
-        preload="auto"
-        autoPlay={false}
-        loop={false}
-        preservesPitch
-        onPlay={() => {
-          pausedRef.current = false;
-          userPausedRef.current = false;
-          clearRecovery();
-          attemptsRef.current = 0;
-          setPlaying(true);
-        }}
-        onPause={handlePause}
-        onWaiting={recoverPlayback}
-        onPlaying={recoverPlayback}
-        onPositionChange={handlePosition}
-        onLoad={() => {
-          const track = currentRef.current;
-          handleLoad(track?.duration || 0);
-        }}
-        onEnded={handleEnded}
-        onError={handleError}
-      >
-        <AudioMetaBridge onMeta={handleAudioMeta} />
-        {children}
-      </Audio>
+      {/* The app tree is a stable sibling — it never remounts with the media
+          element. The singleton `<Audio>` mounts only while a track is armed
+          (an empty src would make react-dom re-fetch the page on web and the
+          native loader gains nothing from an idle element); its handle and
+          the graph tap are re-attached together in the source effect. The
+          meta bridge lives inside the tag so it can read duration/ready. */}
+      {children}
+      {source ? (
+        <Audio
+          ref={audioRef}
+          source={source}
+          context={context}
+          preload="auto"
+          autoPlay={false}
+          loop={false}
+          preservesPitch
+          onPlay={() => {
+            pausedRef.current = false;
+            userPausedRef.current = false;
+            clearRecovery();
+            attemptsRef.current = 0;
+            setPlaying(true);
+          }}
+          onPause={handlePause}
+          onWaiting={recoverPlayback}
+          onPlaying={recoverPlayback}
+          onPositionChange={handlePosition}
+          onLoad={() => {
+            const track = currentRef.current;
+            handleLoad(track?.duration || 0);
+          }}
+          onEnded={handleEnded}
+          onError={handleError}
+        >
+          <AudioMetaBridge onMeta={handleAudioMeta} />
+        </Audio>
+      ) : null}
     </MusicPlayerContext.Provider>
   );
 }
