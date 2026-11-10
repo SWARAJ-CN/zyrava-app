@@ -38,8 +38,10 @@
   --color-danger-soft: var(--danger-soft);
   --color-danger-soft-foreground: var(--danger-soft-foreground);
 
-  /* Info (HeroUI has no info hue) */
-  --color-info: light-dark(oklch(0.55 0.16 255), oklch(0.71 0.14 255));
+  /* Info (HeroUI has no info hue) — `light-dark()` is a browser-only
+     function the native resolver cannot evaluate; the hue is registered
+     per scheme below instead (web globals.css parity). */
+  --color-info: var(--info);
   --color-info-soft: color-mix(in oklab, var(--color-info) 15%, transparent);
   --color-info-soft-foreground: color-mix(in oklab, var(--color-info) 72%, var(--foreground) 28%);
 
@@ -63,11 +65,52 @@
   @variant light {
     --accent: oklch(0.62 0.13 175);
     --background: #ffffff;
+    --info: oklch(0.55 0.16 255);
   }
 
   @variant dark {
     --accent: oklch(0.78 0.13 170);
     --background: #17111c;
+    --info: oklch(0.71 0.14 255);
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Hover/press tokens — the library defines these with color-mix over
+ * var chains; hero's Button resolves them through the runtime and
+ * feeds the result to its colorKit, which ONLY understands
+ * hex/rgb/hsl/hwb — never oklch or raw color-mix. Mirrored here as
+ * pre-computed hex/rgba literals of the same formulas (90/10 hover,
+ * 96/4 default, 20% soft), evaluated per scheme, so the conversion
+ * can never meet a value it cannot parse.
+ * ------------------------------------------------------------------ */
+@layer theme {
+  :root {
+    @variant light {
+      --color-accent-hover: #3fa58c;
+      --color-default-hover: #e8e8ea;
+      --color-danger-hover: #db4c4c;
+      --color-success-hover: #3fbc82;
+      --color-warning-hover: #dda838;
+      --color-default-soft-hover: rgba(241, 240, 241, 0.6);
+      --color-accent-soft-hover: rgba(65, 159, 139, 0.2);
+      --color-danger-soft-hover: rgba(217, 60, 60, 0.2);
+      --color-warning-soft-hover: rgba(221, 168, 56, 0.2);
+      --color-success-soft-hover: rgba(62, 189, 130, 0.2);
+    }
+
+    @variant dark {
+      --color-accent-hover: #6ecfb8;
+      --color-default-hover: #43424a;
+      --color-danger-hover: #db4c4c;
+      --color-success-hover: #3fbc82;
+      --color-warning-hover: #dda838;
+      --color-default-soft-hover: rgba(63, 62, 70, 0.6);
+      --color-accent-soft-hover: rgba(98, 199, 174, 0.2);
+      --color-danger-soft-hover: rgba(217, 60, 60, 0.2);
+      --color-warning-soft-hover: rgba(221, 168, 56, 0.2);
+      --color-success-soft-hover: rgba(62, 189, 130, 0.2);
+    }
   }
 }
 
