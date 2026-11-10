@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Image, Pressable, ScrollView, Text, View } from "react-native";
 import { Icon } from "@/components/ui/icons";
 import { searchPlaylists } from "@/lib/saavn";
+import { Scrim, SCRIM_STOPS } from "@/components/ui/Scrim";
 
 /**
  * A small row of catalogue playlists matching the current search, shown in
@@ -95,7 +96,7 @@ export function PlaylistStrip({ query, onOpen }: { query: string; onOpen: () => 
                       className="absolute left-1/2 top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 text-faint-foreground"
                     />
                   )}
-                  <View className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+                  <Scrim className="absolute inset-0" colors={SCRIM_STOPS.tileSoft} />
                   <Text className="absolute bottom-1.5 left-1.5 rounded bg-black/45 px-1.5 py-0.5 text-[9px] font-semibold text-white/80">
                     {playlist.songCount}
                   </Text>

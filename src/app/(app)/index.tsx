@@ -21,6 +21,8 @@ import { SaveToDevice } from "@/components/features/music/SongRows";
 import { ImportSongsModal } from "@/components/features/music/ImportSongsModal";
 import { InstallModal } from "@/components/features/music/InstallModal";
 import { Waveform } from "@/components/features/music/Waveform";
+import { EqBars } from "@/components/features/music/EqBars";
+import { Scrim, SCRIM_STOPS } from "@/components/ui/Scrim";
 import { Recommendations } from "@/components/features/music/Recommendations";
 import { PlaylistStrip } from "@/components/features/music/PlaylistStrip";
 import { VIBES } from "@/components/features/music/filters";
@@ -104,25 +106,6 @@ interface Library {
 
 type PagePayload = { songs?: Song[]; total?: number };
 type PageResult = PagePayload | { error: string } | null;
-
-/** CSS `.eq` three-bar mimic → native animated bars (shown when the wave
- *  cannot run — kept for API parity even though the analyser is always live
- *  on device). */
-function EqBars({ tone }: { tone: "text-white" | "text-brand" }): JSX.Element {
-  const bars = [0, 1, 2];
-  return (
-    <View className="flex h-full w-full flex-row items-end justify-center gap-[2px]">
-      {bars.map((bar) => (
-        <Animated.View
-          key={bar}
-          entering={FadeInDown.duration(180).delay(bar * 90)}
-          className={cn("w-[3px] rounded-full", tone === "text-brand" ? "bg-brand" : "bg-white")}
-          style={{ height: 6 + (bar % 2) * 8 }}
-        />
-      ))}
-    </View>
-  );
-}
 
 export default function MusicPage(): JSX.Element {
   const [input, setInput] = useState("");
@@ -675,7 +658,7 @@ export default function MusicPage(): JSX.Element {
           color={tone === "text-white" ? "#ffffff" : undefined}
         />
       ) : (
-        <EqBars tone={tone} />
+        <EqBars className="h-full w-full" color={tone === "text-white" ? "#ffffff" : undefined} />
       )}
     </View>
   );
@@ -744,7 +727,7 @@ export default function MusicPage(): JSX.Element {
 
       {/* Primary home tabs — everything below switches with them. */}
       <View className="mt-6 flex-row items-end gap-1 border-b border-separator">
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+        <ScrollView horizontal className="flex-1" showsHorizontalScrollIndicator={false}>
           <View className="flex-row items-end gap-1">
             {HOME_TABS.map((entry) => {
               const isActive = homeTab === entry.value;
@@ -913,7 +896,7 @@ export default function MusicPage(): JSX.Element {
                           <Icon name="globe" className="size-8" color="rgba(0,0,0,0.6)" />
                         </View>
                       )}
-                      <View className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/25 to-transparent" />
+                      <Scrim className="absolute inset-0" colors={SCRIM_STOPS.rail} />
                       <View
                         className={cn(
                           "absolute end-2.5 top-2.5 size-8 items-center justify-center rounded-full bg-white",
@@ -921,7 +904,7 @@ export default function MusicPage(): JSX.Element {
                         )}
                       >
                         {isActive && playing ? (
-                          <EqBars tone="text-white" />
+                          <EqBars className="h-3 w-3" color="#ffffff" />
                         ) : (
                           <Icon name="play" size={15} color="#000" />
                         )}
@@ -1038,9 +1021,9 @@ export default function MusicPage(): JSX.Element {
                       ))}
                     </View>
                   ) : (
-                    <View className="flex-row flex-wrap gap-3 p-3">
+                    <View className="flex-row flex-wrap p-1.5">
                       {Array.from({ length: view === "large" ? 6 : 12 }).map((_, tileIndex) => (
-                        <View key={tileIndex} className="gap-2.5" style={{ width: `${100 / GRID_COLS[view] - 3}%` }}>
+                        <View key={tileIndex} className="gap-2.5 px-1.5 pb-3" style={{ width: `${100 / GRID_COLS[view]}%` }}>
                           <Skeleton className="aspect-square w-full rounded-xl" />
                           <Skeleton className="h-3.5 w-3/4" />
                           <Skeleton className="h-3 w-1/2" />
@@ -1140,15 +1123,15 @@ export default function MusicPage(): JSX.Element {
                       })}
                     </View>
                   ) : (
-                    <View className="flex-row flex-wrap gap-3 p-3">
+                    <View className="flex-row flex-wrap p-1.5">
                       {songs.map((song, songIndex) => {
                         const isActive = song.id === activeId;
                         const src = song.imageLarge || song.image;
                         return (
                           <View
                             key={song.id}
-                            className="relative gap-2.5"
-                            style={{ width: `${(100 - (GRID_COLS[view] - 1) * 3.2) / GRID_COLS[view]}%` }}
+                            className="relative gap-2.5 px-1.5 pb-3"
+                            style={{ width: `${100 / GRID_COLS[view]}%` }}
                           >
                             <Pressable
                               onPress={() => toggleLike(song)}

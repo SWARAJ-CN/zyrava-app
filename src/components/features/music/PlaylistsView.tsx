@@ -10,6 +10,7 @@ import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
 import { useToast } from "@/components/providers/ToastProvider";
 import { cn } from "@/lib/cn";
 import { getPlaylistDetail, searchPlaylists, type PlaylistSummary, Song } from "@/lib/saavn";
+import { Scrim, SCRIM_STOPS } from "@/components/ui/Scrim";
 
 type ApiPlaylist = PlaylistSummary;
 
@@ -225,7 +226,7 @@ export function PlaylistsView({ query }: { query: string }) {
                         className="absolute left-1/2 top-1/2 size-8 -translate-x-1/2 -translate-y-1/2 text-faint-foreground"
                       />
                     )}
-                    <View className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                    <Scrim className="absolute inset-0" colors={SCRIM_STOPS.tile} />
                     <Text className="absolute bottom-2 left-2 text-[10px] font-semibold uppercase tracking-wider text-white/75">
                       {playlist.songs.length} {playlist.songs.length === 1 ? "track" : "tracks"}
                     </Text>
@@ -315,7 +316,7 @@ export function PlaylistsView({ query }: { query: string }) {
                       className="absolute left-1/2 top-1/2 size-8 -translate-x-1/2 -translate-y-1/2 text-faint-foreground"
                     />
                   )}
-                  <View className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent" />
+                  <Scrim className="absolute inset-0" colors={SCRIM_STOPS.tile} />
                   <View className="absolute bottom-2 left-2 flex-row items-center gap-1.5">
                     <Icon name="list" className="size-3 text-white/80" />
                     <Text className="text-[10px] font-semibold uppercase tracking-wider text-white/80">

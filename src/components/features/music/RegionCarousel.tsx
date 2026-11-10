@@ -6,6 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-na
 import { Icon } from "@/components/ui/icons";
 import { REGIONS } from "./regions";
 import { cn } from "@/lib/cn";
+import { Scrim, SCRIM_STOPS } from "@/components/ui/Scrim";
 
 /**
  * The featured strip at the top of the library: one wide panel per region
@@ -100,7 +101,7 @@ export function RegionCarousel({
           >
             {/* Tone wash + readable shade — no full-bleed cover stretching */}
             <View className="absolute inset-0" style={{ backgroundColor: region.tone }} />
-            <View className="absolute inset-0 bg-gradient-to-r from-black/85 via-black/55 to-black/20" />
+            <Scrim className="absolute inset-0" direction="right" colors={SCRIM_STOPS.hero} />
 
             <View className="relative h-full flex-row items-center justify-between gap-4 p-5">
               <View className="min-w-0 flex-1">
@@ -142,18 +143,6 @@ export function RegionCarousel({
                           : `Play ${region.label}`}
                     </Text>
                   </Pressable>
-                  {active === region.label ? (
-                    <Pressable
-                      onPress={() => {
-                        rest();
-                        onSelect(region.label);
-                      }}
-                      className="flex-row items-center gap-1.5 rounded-full border border-white/25 px-3 py-1"
-                    >
-                      <Icon name="music" size={12} color="rgba(255,255,255,0.85)" />
-                      <Text className="text-[11px] font-semibold text-white/85">Open library</Text>
-                    </Pressable>
-                  ) : null}
                 </View>
               </View>
 

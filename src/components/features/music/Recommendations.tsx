@@ -9,6 +9,7 @@ import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
 import { useTaste } from "@/components/providers/TasteProvider";
 import type { Shelf, ShelfKey } from "@/lib/taste";
 import type { Song } from "@/lib/saavn";
+import { Scrim, SCRIM_STOPS } from "@/components/ui/Scrim";
 
 /**
  * The shelves the taste engine built from what the listener has been doing.
@@ -240,7 +241,7 @@ function Row({
                     className="absolute left-1/2 top-1/2 size-5 -translate-x-1/2 -translate-y-1/2 text-faint-foreground"
                   />
                 )}
-                <View className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
+                <Scrim className="absolute inset-0" colors={SCRIM_STOPS.tileSoft} />
                 {/* The hover play badge lands mid-tile on native so it is
                     always reachable: a press plays, this only marks intent. */}
                 <View className="absolute left-1/2 top-1/2 size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-brand/90 opacity-0 transition-opacity active:opacity-100">

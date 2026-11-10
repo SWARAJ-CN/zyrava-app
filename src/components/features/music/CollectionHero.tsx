@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { Image, Pressable, Text, View } from "react-native";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/cn";
+import { useUniwind } from "uniwind";
+import { Scrim } from "@/components/ui/Scrim";
 
 /**
  * Spotify's collection header — a gradient band with the cover sitting on the
@@ -33,17 +35,28 @@ export function CollectionHero({
   flush?: boolean;
   children?: ReactNode;
 }) {
+  const { theme } = useUniwind();
+
   return (
     <View
       className={cn(
         "relative overflow-hidden px-4 pb-5 pt-6 sm:px-6",
         flush ? "border-b border-separator" : "rounded-xl border border-separator",
-        tone === "brand"
-          ? "bg-gradient-to-b from-brand-soft via-surface to-surface"
-          : // The radial plain tone: no gradient engine on native — surface-secondary reads closest.
-            "bg-surface-secondary"
+        tone === "brand" ? "bg-surface" : "bg-surface-secondary"
       )}
     >
+      {tone === "brand" ? (
+        // The web's 14% brand-soft band, painted from resolved accent stops.
+        <Scrim
+          className="absolute inset-0"
+          direction="down"
+          colors={
+            theme === "dark"
+              ? ["rgba(124, 211, 184, 0.13)", "rgba(124, 211, 184, 0.02)", "rgba(0,0,0,0)"]
+              : ["rgba(45, 158, 133, 0.10)", "rgba(45, 158, 133, 0.02)", "rgba(0,0,0,0)"]
+          }
+        />
+      ) : null}
       <View className="flex-row items-end gap-4">
         <View className="relative size-24 flex-none overflow-hidden rounded-lg border border-separator bg-surface-secondary shadow-field sm:size-28">
           {image ? (
