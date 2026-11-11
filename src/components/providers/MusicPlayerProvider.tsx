@@ -28,6 +28,7 @@ import { playbackKind, buildRadioFor, type FetchPool } from "@/lib/taste";
 import { useTaste } from "@/components/providers/TasteProvider";
 import { useOffline } from "@/components/providers/OfflineProvider";
 import { useGuestLock } from "@/components/providers/GuestLockProvider";
+import { useToast } from "@/components/providers/ToastProvider";
 import { playPad as firePad, type PadName } from "@/lib/dj/pads";
 import { onAudioInterruption, deactivateAudioSession } from "@/lib/wake-info";
 import { getItem, setItem } from "@/lib/store";
@@ -518,6 +519,7 @@ function AudioMetaBridge({
 export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const { openPlaybackUrl } = useOffline();
   const { isGuest, requestLogin } = useGuestLock();
+  const { toast: toastNow } = useToast();
   const [queue, setQueue] = useState<Song[]>([]);
   const [queueLabel, setQueueLabel] = useState("");
   const [index, setIndex] = useState(-1);
@@ -2044,8 +2046,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const startQueue = useCallback(
     (list: Song[], label: string, position: number) => {
       if (!engine) {
-        // Expo Go / engine-less binary: say so plainly, stay functional.
+        // Expo Go / engine-less binary: say so plainly, stay functional —
+        // the bar cannot show the error string with no queue mounted.
         setPlayerError(NO_ENGINE_MESSAGE);
+        toastNow({
+          title: "No audio in this build",
+          description: NO_ENGINE_MESSAGE,
+          variant: "warning",
+        });
         return;
       }
       /* A trial run is ten tracks long no matter which surface started it. */
@@ -2067,7 +2075,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         setNowPlayingOpenState(true);
       }
     },
-    [queue, index, togglePlay, isGuest]
+    [queue, index, togglePlay, isGuest, toastNow]
   );
 
   const setNowPlayingOpen = useCallback((open: boolean) => {

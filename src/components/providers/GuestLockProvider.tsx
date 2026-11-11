@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { Text, View } from "react-native";
-import { Link, usePathname, useRouter, type Href } from "expo-router";
+import { usePathname, useRouter, type Href } from "expo-router";
 import { getItem, setItem } from "@/lib/store";
 import { Button } from "@/components/ui/Button";
 import { Icon } from "@/components/ui/icons";
@@ -159,6 +159,11 @@ export function GuestLockProvider({ children }: { children: ReactNode }) {
     router.push(`/login${next}` as Href);
   };
 
+  const goRegister = () => {
+    setLoginOpen(false);
+    router.push("/register" as Href);
+  };
+
   const value = useMemo(
     () => ({ isGuest, loginOpen, requestLogin, closeLogin, requireAuth }),
     [isGuest, loginOpen, requestLogin, closeLogin, requireAuth]
@@ -171,8 +176,11 @@ export function GuestLockProvider({ children }: { children: ReactNode }) {
       {children}
       <Modal
         /* Derived rather than cleared by an effect: signing in mid-ask takes
-           the door down itself, with no cascading render. */
-        open={loginOpen && isGuest}
+           the door down itself, with no cascading render. The auth-route term
+           force-unmounts it the moment the login/register screen mounts, so
+           the dialog's overlay can never sit over its own destination
+           (the white screen the lingering exit animation used to paint). */
+        open={loginOpen && isGuest && !PUBLIC_ROUTES.has(pathname)}
         onClose={closeLogin}
         title={copy.title}
         description={copy.description}
@@ -200,9 +208,9 @@ export function GuestLockProvider({ children }: { children: ReactNode }) {
           </View>
           <Text className="text-[11px] text-faint-foreground">
             No card, no store, no extra app —{" "}
-            <Link href={"/register" as Href} asChild>
-              <Text className="font-semibold text-brand underline">create one</Text>
-            </Link>{" "}
+            <Text className="font-semibold text-brand underline" onPress={goRegister}>
+              create one
+            </Text>{" "}
             instead if this is your first time here.
           </Text>
         </View>

@@ -133,18 +133,25 @@ export function applyGlobalFont(): void {
   const wrap = (fn: (type: unknown, props: unknown, ...children: unknown[]) => unknown) =>
     function patched(this: unknown, type: unknown, props: unknown, ...rest: unknown[]) {
       if (isTarget(type)) {
-        const currentProps = (props ?? null) as Record<string, unknown> | null;
-        const family = familyFor(currentProps);
-        if (family && !isAnimatedStyleHandle(currentProps?.style)) {
-          const existing = currentProps ?? {};
-          props = {
-            ...existing,
+        const current = props;
+        try {
+          const currentProps = (props ?? null) as Record<string, unknown> | null;
+          const family = familyFor(currentProps);
+          if (family && !isAnimatedStyleHandle(currentProps?.style)) {
+            const existing = currentProps ?? {};
+            props = {
+              ...existing,
             // One plain object, not an array — expo-router's dev-time Slot
             // guard (and StyleSheet consumers generally) reject array styles
             // on elements it validates; flatten keeps the same precedence:
             // the component's own style wins over the injected family.
-            style: StyleSheet.flatten([{ fontFamily: family }, existing.style as never]),
-          };
+              style: StyleSheet.flatten([{ fontFamily: family }, existing.style as never]),
+            };
+          }
+        } catch {
+          // A props rewrite must never out-crash the render it beautifies —
+          // worst case this one element keeps the system font.
+          props = current;
         }
       }
       return (fn as (...args: unknown[]) => unknown).call(this, type, props, ...rest);
