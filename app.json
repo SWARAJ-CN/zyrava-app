@@ -71,7 +71,8 @@
           "enableFFmpeg": true
         }
       ],
-      "expo-image"
+      "expo-image",
+      "expo-asset"
     ],
     "experiments": {
       "typedRoutes": true,
