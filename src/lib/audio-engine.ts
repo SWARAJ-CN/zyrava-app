@@ -9,45 +9,88 @@
  * each route as "missing the required default export".
  *
  * This shim requires the package inside a try/catch, so an app without the
- * native engine still boots: browsing, library, chat, lyrics and settings all
- * work, while the player degrades to a clear message instead of a crash wall.
+ * native engine still boots. Playback itself never depends on this module:
+ * when it is absent the player provider runs its Expo Go backend on
+ * `expo-audio` (see lib/go-audio.ts), and only the studio-grade processing
+ * (graph, EQ, FX, spatial, analyser, pads) is out of reach.
  * Every runtime use MUST go through `getAudioEngine()`; direct imports are
  * allowed only as `import type { … }` (erased at compile time).
  */
+import Constants from "expo-constants";
+
 export type AudioEngine = typeof import("react-native-audio-api");
+
+/** The audio path this binary can actually run. */
+export type AudioBackend = "native-graph" | "expo-go";
 
 let cached: AudioEngine | null | undefined;
 let lastError: string | null = null;
+let warned = false;
+
+/**
+ * Expo Go's execution environment — its bundle ships only the standard SDK
+ * modules, so the custom engine will never be present there. Detected once
+ * via expo-constants instead of a global sniff that no runtime guarantees.
+ */
+export const isExpoGo = Constants.executionEnvironment === "storeClient";
 
 export function getAudioEngine(): AudioEngine | null {
   if (cached === undefined) {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      cached = require("react-native-audio-api") as AudioEngine;
-      lastError = null;
+      const candidate = require("react-native-audio-api") as AudioEngine | undefined; // eslint-disable-line @typescript-eslint/no-require-imports
+      /*
+       * A require that loads but cannot construct its context (the
+       * "getDevicePreferredSampleRate of null" failure mode: the JS side
+       * resolved while the native module never registered) is as useless as
+       * a missing module — both must read as "no engine", never as a
+       * half-usable one that later calls die on.
+       */
+      const usable =
+        !!candidate &&
+        typeof candidate.AudioContext === "function" &&
+        typeof candidate.Audio === "function";
+      cached = usable ? candidate : null;
+      if (usable) {
+        lastError = null;
+      } else {
+        lastError = "react-native-audio-api loaded without its native engine";
+      }
     } catch (error) {
       cached = null;
       lastError = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
-      // Surfaced so a missing engine on a real build is one logcat line from
-      // a diagnosis instead of a guess between Expo Go and a native failure.
-      console.warn(`[zyrava] audio engine unavailable — ${lastError}`);
+    }
+    if (cached === null && !warned) {
+      warned = true;
+      // Exactly one line per launch, whatever asked for the engine.
+      console.warn(`[zyrava] native audio engine unavailable — ${lastError}`);
     }
   }
   return cached;
 }
 
-/** Why the engine failed to load, if it did ("", "Expo Go", or the error). */
+/**
+ * Why the native engine is absent, if it is — for one honest line in the
+ * mixer console ("", or a short reason).
+ */
 export function audioEngineFailure(): string {
+  if (cached === undefined) getAudioEngine();
   if (cached) return "";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ExpoGo = (globalThis as any).ExpoGo;
-  if (ExpoGo != null) return "Expo Go — its bundle has no custom native modules.";
+  if (isExpoGo) return "Expo Go carries no custom native modules";
   return lastError ?? "unknown";
 }
 
-/** True when the real audio engine is linked into this binary. */
-export const hasAudioEngine = getAudioEngine() !== null;
+/** The playback backend this binary runs — decided once, stable for good. */
+export function audioBackend(): AudioBackend {
+  return getAudioEngine() ? "native-graph" : "expo-go";
+}
 
-/** Shown in the player bar when playback is attempted without the engine. */
+/**
+ * True when the studio-grade graph (EQ, FX rack, spatial modes, analyser,
+ * DJ pads) exists in this binary. Playback, queueing, seek, tempo and the
+ * mixer's *state* work everywhere; only these graph-backed stages need it.
+ */
+export const hasAdvancedAudio = getAudioEngine() !== null;
+
+/** Only shown when NO audio backend exists at all (never in Expo Go). */
 export const NO_ENGINE_MESSAGE =
-  "This build has no audio engine — install the ZYRAVA dev build (see README) to listen.";
+  "No audio backend in this build — reinstall the ZYRAVA app (see README) to listen.";

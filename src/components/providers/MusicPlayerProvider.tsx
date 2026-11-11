@@ -21,14 +21,19 @@ import type {
   WaveShaperNode,
   AnalyserNode as RnAnalyserNode,
 } from "react-native-audio-api";
-import { audioEngineFailure, getAudioEngine, NO_ENGINE_MESSAGE } from "@/lib/audio-engine";
+import { getAudioEngine } from "@/lib/audio-engine";
+import {
+  configureGoAudioMode,
+  createGoAudioTransport,
+  type AudioTransport,
+  type AudioTransportCallbacks,
+} from "@/lib/go-audio";
 import type { Song } from "@/lib/saavn";
 import { searchSongs } from "@/lib/saavn";
 import { playbackKind, buildRadioFor, type FetchPool } from "@/lib/taste";
 import { useTaste } from "@/components/providers/TasteProvider";
 import { useOffline } from "@/components/providers/OfflineProvider";
 import { useGuestLock } from "@/components/providers/GuestLockProvider";
-import { useToast } from "@/components/providers/ToastProvider";
 import { playPad as firePad, type PadName } from "@/lib/dj/pads";
 import { onAudioInterruption, deactivateAudioSession } from "@/lib/wake-info";
 import { getItem, setItem } from "@/lib/store";
@@ -36,12 +41,16 @@ import { getItem, setItem } from "@/lib/store";
 /*
  * The engine loads through the lazy shim (see audio-engine.ts): in a binary
  * without react-native-audio-api — Expo Go — `engine` is simply null. The
- * app still boots, browses, chats and reads lyrics; playback degrades to a
- * clear message instead of a crash wall at import time.
+ * app still boots, browses, chats and reads lyrics. Playback itself then
+ * runs on the expo-audio transport (lib/go-audio.ts), and only the
+ * studio-grade graph — EQ, FX rack, spatial, analyser, pads — degrades to
+ * clearly-labelled inactive controls instead of a crash wall.
  */
 const engine = getAudioEngine();
 const AudioTagComponent = engine?.Audio ?? null;
 const notify = engine?.PlaybackNotificationManager ?? null;
+/** True when playback must ride the Expo Go transport (no native engine). */
+const goBackend = engine === null;
 
 /* ------------------------------------------------------------------ *
  * Native port of the web MusicPlayerProvider.
@@ -484,7 +493,18 @@ const MusicPlayerContext = createContext<MusicPlayerValue | null>(null);
  */
 let sharedContext: AudioContext | null = null;
 function acquireContext(): AudioContext | null {
-  if (!sharedContext && engine) sharedContext = new engine.AudioContext();
+  if (!sharedContext && engine) {
+    try {
+      sharedContext = new engine.AudioContext();
+    } catch (error) {
+      // A context that refuses to start leaves every graph feature off;
+      // the transport still plays through the element's own volume.
+      console.warn(
+        `[zyrava] audio context unavailable — ${error instanceof Error ? error.message : String(error)}`
+      );
+      sharedContext = null;
+    }
+  }
   return sharedContext;
 }
 function releaseContext(): void {
@@ -519,7 +539,6 @@ function AudioMetaBridge({
 export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const { openPlaybackUrl } = useOffline();
   const { isGuest, requestLogin } = useGuestLock();
-  const { toast: toastNow } = useToast();
   const [queue, setQueue] = useState<Song[]>([]);
   const [queueLabel, setQueueLabel] = useState("");
   const [index, setIndex] = useState(-1);
@@ -1495,6 +1514,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
      wired yet — the media element only mounts once a track is armed (see the
      source effect), keeping `<Audio>` away from an empty src. */
   useEffect(() => {
+    /* Expo Go: the OS session belongs to expo-audio; its mode call replaces
+       the native AudioManager's three lines below. */
+    if (goBackend) {
+      void configureGoAudioMode();
+      return () => {
+        spatialCleanupRef.current();
+      };
+    }
     void engine?.AudioManager.setAudioSessionActivity(true).catch(() => undefined);
     engine?.AudioManager.observeAudioInterruptions(true);
     /* Android 13+ needs POST_NOTIFICATIONS before the foreground-service
@@ -1683,11 +1710,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
           setPlaying(false);
           return;
         }
-        setVisualizerReady(true);
+        setVisualizerReady(Boolean(engine));
         arm(local);
         return;
       }
-      setVisualizerReady(true);
+      setVisualizerReady(Boolean(engine));
       arm(refreshed ?? current.streamUrl);
     };
     startStreamRef.current = startStream;
@@ -1699,6 +1726,16 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.id]);
+
+  /* ── Expo Go transport ──
+   * Without the native engine, the same armed source runs on expo-audio.
+   * The handle drops into `audioRef`, so every command the provider issues —
+   * play, pause, seek, volume, mute, tempo — reaches the player, and events
+   * come back through the same handlers the `<Audio>` tag drives. The effect
+   * that builds it lives below the handlers it reports to (see the tail of
+   * this provider); only `goTransportRef` is needed here. */
+  const goTransportRef = useRef<AudioTransport | null>(null);
+  const goHandlersRef = useRef<AudioTransportCallbacks | null>(null);
 
   /* When a swapped-in source mounts/loads the element: wire the graph (the
      handle only exists now), apply the rate + envelope and play it if the
@@ -2045,17 +2082,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   const startQueue = useCallback(
     (list: Song[], label: string, position: number) => {
-      if (!engine) {
-        // Expo Go / engine-less binary: say so plainly, stay functional —
-        // the bar cannot show the error string with no queue mounted.
-        setPlayerError(NO_ENGINE_MESSAGE);
-        toastNow({
-          title: "No audio in this build",
-          description: `${NO_ENGINE_MESSAGE} (${audioEngineFailure()})`,
-          variant: "warning",
-        });
-        return;
-      }
+      // Playback always has a backend: the native graph when the engine is
+      // linked, the expo-audio transport in Expo Go (goBackend === !engine).
+      // Studio features degrade instead of gating the queue.
       /* A trial run is ten tracks long no matter which surface started it. */
       const run = isGuest ? list.slice(0, GUEST_PLAY_LIMIT) : list;
       const track = run[Math.min(position, run.length - 1)];
@@ -2075,7 +2104,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         setNowPlayingOpenState(true);
       }
     },
-    [queue, index, togglePlay, isGuest, toastNow]
+    [queue, index, togglePlay, isGuest]
   );
 
   const setNowPlayingOpen = useCallback((open: boolean) => {
@@ -2466,6 +2495,76 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       setDuration(metaDuration);
     }
   }, []);
+
+  /* ── Expo Go transport wiring ──
+   * Declared here so the handlers above exist by the time this effect
+   * references them. Only `source` recreates the player: the live handler
+   * closures ride `goHandlersRef`, so a re-render never restarts the song. */
+  useEffect(() => {
+    goHandlersRef.current = {
+      onLoad: (loadedDuration) => handleLoad(loadedDuration),
+      onPlay: () => {
+        pausedRef.current = false;
+        userPausedRef.current = false;
+        clearRecovery();
+        attemptsRef.current = 0;
+        setPlaying(true);
+      },
+      onPause: handlePause,
+      onEnded: handleEnded,
+      onError: handleError,
+      onPositionChange: handlePosition,
+    };
+  });
+  useEffect(() => {
+    if (!goBackend) return;
+    if (!source) {
+      goTransportRef.current?.dispose();
+      goTransportRef.current = null;
+      return;
+    }
+    const transport = createGoAudioTransport(
+      source,
+      {
+        onLoad: (loadedDuration) => goHandlersRef.current?.onLoad(loadedDuration),
+        onPlay: () => goHandlersRef.current?.onPlay(),
+        onPause: () => goHandlersRef.current?.onPause(),
+        onEnded: () => goHandlersRef.current?.onEnded(),
+        onError: (error) => goHandlersRef.current?.onError(error),
+        onPositionChange: (time) => goHandlersRef.current?.onPositionChange(time),
+      },
+      {
+        volume: appliedVolume(volumeRef.current),
+        muted: mutedRef.current,
+        rate: rateRef.current,
+      }
+    );
+    goTransportRef.current = transport;
+    audioRef.current = transport.handle;
+    // The play intent (shouldPlayRef) was set by the loader effect — the
+    // element's own effect ran earlier in this commit with no handle yet.
+    if (shouldPlayRef.current && !playPendingRef.current) {
+      playPendingRef.current = true;
+      transport.handle.play();
+    }
+    return () => {
+      if (goTransportRef.current === transport) {
+        goTransportRef.current = null;
+        audioRef.current = null;
+      }
+      transport.dispose();
+    };
+    // The transport is per-source by design; the live handlers ride the ref
+    // above, so nothing else here may recreate the player.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goBackend, source]);
+  useEffect(
+    () => () => {
+      goTransportRef.current?.dispose();
+      goTransportRef.current = null;
+    },
+    []
+  );
 
   const value = useMemo<MusicPlayerValue>(
     () => ({

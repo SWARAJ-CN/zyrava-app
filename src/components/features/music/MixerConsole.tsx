@@ -21,6 +21,7 @@ import {
   type SpatialMode,
 } from "@/components/providers/MusicPlayerProvider";
 import { PADS, type PadName } from "@/lib/dj/pads";
+import { hasAdvancedAudio } from "@/lib/audio-engine";
 import type { Song } from "@/lib/saavn";
 
 /** heroui hands Slider changes as `number | number[]` — we always ask one value. */
@@ -233,6 +234,21 @@ export function MixerConsole() {
           gap: 16,
         }}
       >
+        {/* ── Expo Go notice — the graph-backed stages are inactive, not
+            removed: every control stays, playback still runs, and the dev
+            build lights the rest of the room up. ── */}
+        {!hasAdvancedAudio ? (
+          <View className="rounded-xl border border-amber-400/25 bg-amber-400/[0.07] px-4 py-3">
+            <Text className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-300/90">
+              Expo Go — studio processing off
+            </Text>
+            <Text className="mt-1 text-xs leading-4 text-white/60">
+              Playback, queue and transport run normally. EQ, FX rack, spatial
+              modes, pads and metering need the ZYRAVA dev build — install it
+              (see README) to unlock them.
+            </Text>
+          </View>
+        ) : null}
         {/* ── Deck: artwork, VFD readout, transport ── */}
         <View className={cn(PANEL, "p-4")}>
           <View className="flex-row items-start gap-3.5">
