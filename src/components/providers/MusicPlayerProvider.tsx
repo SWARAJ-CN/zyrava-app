@@ -21,7 +21,7 @@ import type {
   WaveShaperNode,
   AnalyserNode as RnAnalyserNode,
 } from "react-native-audio-api";
-import { getAudioEngine, NO_ENGINE_MESSAGE } from "@/lib/audio-engine";
+import { audioEngineFailure, getAudioEngine, NO_ENGINE_MESSAGE } from "@/lib/audio-engine";
 import type { Song } from "@/lib/saavn";
 import { searchSongs } from "@/lib/saavn";
 import { playbackKind, buildRadioFor, type FetchPool } from "@/lib/taste";
@@ -2051,7 +2051,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         setPlayerError(NO_ENGINE_MESSAGE);
         toastNow({
           title: "No audio in this build",
-          description: NO_ENGINE_MESSAGE,
+          description: `${NO_ENGINE_MESSAGE} (${audioEngineFailure()})`,
           variant: "warning",
         });
         return;
