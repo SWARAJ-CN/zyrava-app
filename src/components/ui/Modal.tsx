@@ -25,6 +25,8 @@ interface ModalProps {
   description?: ReactNode;
   footer?: ReactNode;
   size?: Size;
+  /** Disable when vertical drags should only scroll the dialog body. */
+  isSwipeable?: boolean;
   children: ReactNode;
 }
 
@@ -41,6 +43,7 @@ export function Modal({
   description,
   footer,
   size = "md",
+  isSwipeable = true,
   children,
 }: ModalProps): ReactNode {
   return (
@@ -53,7 +56,11 @@ export function Modal({
       <Dialog.Portal>
         {/* Dismissible backdrop = true. */}
         <Dialog.Overlay isCloseOnPress />
-        <Dialog.Content className="w-full gap-3 self-center" style={{ maxWidth: WIDTHS[size] }}>
+        <Dialog.Content
+          isSwipeable={isSwipeable}
+          className="w-full gap-3 self-center"
+          style={{ maxWidth: WIDTHS[size] }}
+        >
           {/*
             `Dialog.Title` is a Text element, so a node title (icon + label)
             renders as a View row instead; string titles keep the heading role.

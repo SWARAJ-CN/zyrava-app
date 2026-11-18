@@ -38,8 +38,8 @@ Import paths keep the `@/…` prefix unchanged (`@` → `src`), so `@/lib/saavn`
    (tiny typed event bus). Event names preserved verbatim (`music:theme-change`,
    `amare:locale`, `music:voice-language`, …).
 3. `document.cookie` (locale cookie `amare_locale`) → store key `amare_locale` (cookie mirror).
-4. `crypto.randomUUID()` → `@/lib/uuid` (expo-crypto randomUUID, same fallback strings).
-5. `crypto.subtle.digest("SHA-256")` → expo-crypto digestStringAsync.
+4. `crypto.randomUUID()` → `@/lib/uuid` (global randomUUID where available, same fallback strings).
+5. `crypto.subtle.digest("SHA-256")` → `crypto-js/sha256` (same UTF-8 digest; no native module needed).
 6. node-forge DES decryption → crypto-js `DES` ECB (same key `38346591`, same iv semantics).
 7. `AbortSignal.timeout(ms)` works in RN — keep.
 8. `Intl` (lib/format) works in Hermes — keep.
@@ -49,9 +49,12 @@ Import paths keep the `@/…` prefix unchanged (`@` → `src`), so `@/lib/saavn`
    exactly like the browser. Endpoint paths stay relative `/api/...` resolved against
    `EXPO_PUBLIC_API_URL`.
 10. Next rewrites `/api/auth|library|community|visits` → resolved against the account API
-    directly; `/api/music/*` (the Next route handlers) become **local calls** to the ported
-    `src/lib/saavn.ts` + `src/lib/lrclib.ts` — RN has no CORS, so the client talks to the
-    upstreams itself. `MUSIC_API` mirrors (comma-separated) via `EXPO_PUBLIC_MUSIC_API`.
+    directly; `/api/music/*` uses the Next route handlers when
+    `EXPO_PUBLIC_WEB_BASE_URL` is configured. Otherwise `src/lib/saavn.ts` and
+    `src/lib/lrclib.ts` call upstreams directly, applying the web route's search
+    limits and duplicate headroom. `MUSIC_API` mirrors (comma-separated) are
+    configured via `EXPO_PUBLIC_MUSIC_API`. Public Expo environment variables
+    must use literal `process.env.EXPO_PUBLIC_*` references to survive bundling.
 11. `new Audio()` / `<audio>` → react-native-audio-api `<Audio>` element + `AudioContext`
     (`createMediaElementSource`). All Web-Audio node types used by the graph exist
     (Gain/StereoPanner/BiquadFilter/Convolver/Delay/WaveShaper/Analyser/Oscillator/
@@ -98,3 +101,48 @@ web app exists in the mobile app with the same value format.
 - Web Audio `DynamicsCompressorNode` is approximated (node absent in the native engine).
 - Speech recognition remains grammar-only (web never wired a mic UI in this fork).
 - Navigation is expo-router; hash anchors (#library-list…) become scroll refs / routes.
+
+## November 2026 mobile parity update
+
+- Startup no longer imports the remote-push notifications barrel. Local reminders
+  load only when the installed binary contains the scheduler and permissions APIs.
+  Missing optional notification modules disable reminders, not routes or playback.
+- File fingerprints use JavaScript SHA-256 with the same UTF-8 seed and digest as
+  the web; ExpoCrypto is no longer required to import offline/library/player routes.
+- Customize and Payments are home tabs and drawer destinations. Partner/birthday
+  drafts, 144 palettes, custom hex values, animation previews/sets, loading messages,
+  duration, masked directory search, incoming acceptance/removal and outgoing status
+  use the existing account APIs. Payment history is paginated and scoped by the server.
+- Account colours update shared Uniwind tokens. Logout, expiry and removal restore
+  the original palette. The private account is identified by the server's experience
+  flag; its hidden menus remain hidden when the admin appearance switch is off.
+- Fullscreen lyrics has square artwork, a small timer, anchored transport and the
+  three web dancing characters. Selecting a character replaces the artwork; pausing
+  playback or backgrounding pauses the animation. Reduced motion uses a still frame.
+- Native animation sources are bundled JSON, loaded on demand. Hidden retained tabs
+  pause animation effects. Native scroll indicators remain platform controls.
+
+### Mobile checkout
+
+The mobile checkout uses Razorpay Standard Checkout in WebView with `callback_url`,
+following [Razorpay's WebView integration](https://razorpay.com/docs/payments/payment-gateway/web-integration/standard/webview/).
+Only the public key and frozen order details enter the checkout. The app sends no
+session cookie or bearer token into it. Returning or closing checkout checks the
+purchase with the authenticated server API; the redirect never proves payment.
+Pending orders can be resumed/checked, and a failed order request reuses its persisted
+idempotency key. Price comes from admin-controlled payment settings.
+
+The server's new `/api/customization/payments/mobile-return` POST endpoint is a static
+acknowledgement and must be included in the next server deployment. Order creation,
+server-side capture checks, fulfilment and payment history reuse existing endpoints.
+WebView checkout has payment-method limitations (including UPI Intent); a dedicated
+native Razorpay SDK needs an installed build and cannot be added to Expo Go by a JS
+reload. Test checkout on the intended device before a payment-enabled release.
+
+### Verification and runtime
+
+Run `npm test`, `npm run typecheck`, `npm run lint`, and
+`npx expo export --platform android --max-workers 2`.
+After dependency changes, restart Metro with `npx expo start --clear` and reload the
+client. An installed development APK must be rebuilt to receive native package updates;
+the startup guards and JavaScript hashing fallback work without those optional modules.

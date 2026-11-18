@@ -1,6 +1,7 @@
 import type { JSX } from "react";
 import { View } from "react-native";
 import { Stack } from "expo-router";
+import { useThemeColor } from "heroui-native";
 
 import { AppChrome } from "@/components/AppChrome";
 
@@ -15,9 +16,10 @@ import { AppChrome } from "@/components/AppChrome";
  * because the chrome never unmounts.
  */
 export default function AppLayout(): JSX.Element {
+  const backgroundColor = useThemeColor("background");
   return (
     <View className="flex-1">
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor } }} />
       <AppChrome />
     </View>
   );

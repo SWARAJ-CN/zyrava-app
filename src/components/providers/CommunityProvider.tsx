@@ -108,7 +108,7 @@ function applyPresence(conversation: ConversationItem, online: boolean, lastSeen
 export function CommunityProvider({ children }: { children: ReactNode }) {
   const { user, status } = useAuth();
   const toast = useToast();
-  const authenticated = status === "authenticated" && !!user;
+  const authenticated = status === "authenticated" && !!user && user.experience !== "brown-burgundy";
 
   const [chatOpen, setChatOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -135,7 +135,7 @@ export function CommunityProvider({ children }: { children: ReactNode }) {
    * account hides the old member's data immediately without a reset pass.
    */
   const [ownerId, setOwnerId] = useState<string | null>(null);
-  const currentId = status === "authenticated" ? user?.id ?? null : null;
+  const currentId = authenticated ? user?.id ?? null : null;
   const ready = currentId !== null && ownerId === currentId;
 
   /*
@@ -194,7 +194,10 @@ export function CommunityProvider({ children }: { children: ReactNode }) {
     setRemoteRequests(inbox.incoming.length);
     setOnlineIds((current) => {
       const next = new Set(current);
-      for (const thread of threads) if (thread.user.online) next.add(thread.user.id);
+      for (const thread of threads) {
+        if (thread.user.online) next.add(thread.user.id);
+        else next.delete(thread.user.id);
+      }
       return next;
     });
     setOwnerId(owner);
@@ -214,7 +217,17 @@ export function CommunityProvider({ children }: { children: ReactNode }) {
       onCommunityEvent("presence:init", (payload) => {
         const { online } = payload as { online: string[] };
         // Your own tab is not information about anybody else.
-        setOnlineIds(new Set(online.filter((id) => id !== userIdRef.current)));
+        const ids = new Set(online.filter((id) => id !== userIdRef.current));
+        setOnlineIds(ids);
+        // A reconnect snapshot is authoritative; stale REST flags must not
+        // keep an offline listener looking online and hide their last activity.
+        setConversations((current) =>
+          current.map((thread) => ({
+            ...thread,
+            user: { ...thread.user, online: ids.has(thread.user.id) },
+          }))
+        );
+        setPeople((current) => current.map((person) => ({ ...person, online: ids.has(person.id) })));
       })
     );
 
@@ -234,11 +247,17 @@ export function CommunityProvider({ children }: { children: ReactNode }) {
         });
         setConversations((current) =>
           current.map((thread) =>
-            thread.user.id === userId ? applyPresence(thread, online, lastSeenAt) : thread
+            thread.user.id === userId
+              ? applyPresence(thread, online, lastSeenAt ?? thread.user.lastSeenAt)
+              : thread
           )
         );
         setPeople((current) =>
-          current.map((person) => (person.id === userId ? { ...person, online, lastSeenAt } : person))
+          current.map((person) =>
+            person.id === userId
+              ? { ...person, online, lastSeenAt: lastSeenAt ?? person.lastSeenAt }
+              : person
+          )
         );
       })
     );

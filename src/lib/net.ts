@@ -13,7 +13,14 @@ type Jar = Record<string, string>;
 
 function readJar(): Jar {
   try {
-    return JSON.parse(getItem(JAR_KEY) ?? "{}") as Jar;
+    const parsed: unknown = JSON.parse(getItem(JAR_KEY) ?? "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).filter(
+        ([name, value]) =>
+          /^[A-Za-z0-9_-]+$/.test(name) && typeof value === "string" && !/[\r\n;]/.test(value)
+      )
+    );
   } catch {
     return {};
   }
@@ -60,10 +67,12 @@ export function resolveUrl(path: string): string {
 }
 
 export async function netFetch(input: string, init?: RequestInit): Promise<Response> {
+  const url = resolveUrl(input);
+  const isAccountOrigin = new URL(url).origin === new URL(API_URL).origin;
   const headers = new Headers(init?.headers);
-  const cookie = cookieHeader();
+  const cookie = isAccountOrigin ? cookieHeader() : "";
   if (cookie && !headers.has("Cookie")) headers.set("Cookie", cookie);
-  const response = await fetch(resolveUrl(input), { ...init, headers });
-  absorbSetCookies(response.headers);
+  const response = await fetch(url, { ...init, headers });
+  if (isAccountOrigin) absorbSetCookies(response.headers);
   return response;
 }

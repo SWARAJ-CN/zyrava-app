@@ -1,3 +1,4 @@
+import { useCustomization } from "./CustomizationProvider";
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { useToast as useHeroToast } from "heroui-native";
 import { announce } from "@/lib/announcer";
@@ -34,6 +35,7 @@ const VARIANT: Record<Variant, "accent" | "success" | "warning" | "danger"> = {
  * exposes the same call surface on top of it.
  */
 export function ToastProvider({ children }: { children: ReactNode }) {
+  const { personalTheme } = useCustomization();
   const { locale } = useI18n();
   const { toast: heroToast } = useHeroToast();
   /* A toast carries the shop's own words, written in the language of the
@@ -43,7 +45,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<ToastContextValue>(() => {
     const show = ({ title, description, variant = "info" }: ToastInput) => {
-      heroToast.show({ label: title, description, variant: VARIANT[variant] });
+      heroToast.show({ label: title, description, variant: personalTheme && variant === "success" ? "accent" : VARIANT[variant] });
       /* The voice says what the toast says, so the reader does not have to
          look at the screen to know something went through. */
       announce(description ? `${title}. ${description}` : title, { lang: speech });
@@ -53,7 +55,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       success: (title, description) => show({ title, description, variant: "success" }),
       error: (title, description) => show({ title, description, variant: "error" }),
     };
-  }, [heroToast, speech]);
+  }, [heroToast, speech, personalTheme]);
 
   return <ToastContext.Provider value={value}>{children}</ToastContext.Provider>;
 }

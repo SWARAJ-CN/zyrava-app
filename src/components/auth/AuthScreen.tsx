@@ -1,3 +1,5 @@
+import { Animation } from "@/components/ui/Animation";
+import { useCustomization } from "@/components/providers/CustomizationProvider";
 import { useEffect, useState } from "react";
 import {
   KeyboardAvoidingView,
@@ -17,6 +19,7 @@ import { ClickButton } from "@/components/ui/ClickButton";
 import { Input } from "@/components/ui/Input";
 import { Icon } from "@/components/ui/icons";
 import { TrendingCarousel } from "@/components/auth/TrendingCarousel";
+import { AuthLoadingScreen } from "@/components/auth/AuthLoadingScreen";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { ApiError } from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -67,11 +70,12 @@ export function AuthScreen({
   initialSlides?: TrendingSlide[];
 }) {
   const router = useRouter();
+  const { welcome } = useCustomization();
   const { status, login, register } = useAuth();
   const isRegister = mode === "register";
   // expo-router hands us `?next=` as a route param; same rules as the web.
   const params = useLocalSearchParams<{ next?: string | string[] }>();
-  const rawNext = Array.isArray(params.next) ? params.next[0] ?? null : params.next ?? null;
+  const rawNext = Array.isArray(params.next) ? (params.next[0] ?? null) : (params.next ?? null);
   const nextPath = safeNext(rawNext);
 
   const [method, setMethod] = useState<Method>("email");
@@ -79,6 +83,10 @@ export function AuthScreen({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [identifier, setIdentifier] = useState("");
+  const personalWelcome =
+    !isRegister &&
+    welcome?.personal &&
+    (!identifier.trim() || identifier.trim().toLowerCase() === welcome.identifier.toLowerCase());
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -89,6 +97,7 @@ export function AuthScreen({
   const accent = useThemeColor("accent");
   const accentForeground = useThemeColor("accent-foreground");
   const muted = useThemeColor("muted");
+  const background = useThemeColor("background");
 
   // A signed-in visitor has no business on the auth screens.
   useEffect(() => {
@@ -127,6 +136,7 @@ export function AuthScreen({
   };
 
   const submit = async () => {
+    if (busy || status === "loading") return;
     setFormError(null);
     if (!validate()) return;
 
@@ -143,7 +153,8 @@ export function AuthScreen({
       } else {
         await login({ identifier: identifier.trim(), password, remember });
       }
-      router.replace(nextPath as Href);
+      // The authenticated-status effect owns navigation, so a successful
+      // request cannot dispatch two replacements of the root stack.
     } catch (error) {
       if (error instanceof ApiError) {
         setFormError(error.message);
@@ -170,267 +181,305 @@ export function AuthScreen({
   const label = (text: string, extra?: string) => (
     <Text className="text-[11px] font-semibold uppercase tracking-[0.55px] text-muted">
       {text}
-      {extra ? <Text className="normal-case tracking-normal text-faint-foreground"> {extra}</Text> : null}
+      {extra ? (
+        <Text className="normal-case tracking-normal text-faint-foreground"> {extra}</Text>
+      ) : null}
     </Text>
   );
 
   return (
-    <SafeAreaView edges={["top", "bottom", "left", "right"]} className="flex-1 bg-background">
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
+    <View style={{ flex: 1, backgroundColor: background }}>
+      <SafeAreaView
+        edges={["top", "bottom", "left", "right"]}
+        style={{ flex: 1, backgroundColor: background }}
+        accessibilityElementsHidden={busy || status === "loading"}
+        importantForAccessibility={busy || status === "loading" ? "no-hide-descendants" : "auto"}
       >
-        {/* Header row — brand and the studio line, as on the web column. */}
-        <View className="flex-row items-center justify-between gap-3 px-5 pt-6 pb-2">
-          <View className="flex-row items-center gap-2">
-            <View
-              className="size-7 items-center justify-center"
-              style={{ borderRadius: 0.55 * 16, backgroundColor: accent }}
-            >
-              <Icon name="music" size={14} color={accentForeground} strokeWidth={2.2} />
-            </View>
-            <Text className="text-xs font-bold uppercase tracking-[2.4px] text-foreground">
-              ZYRAVA
-            </Text>
-          </View>
-          <Text className="text-[10px] font-medium uppercase tracking-[1.6px] text-faint-foreground">
-            Private listening studio
-          </Text>
-        </View>
-
-        <ScrollView
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.scroller}
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          {/* The mobile variant's trending card sits above the form. */}
-          <View className="w-full max-w-sm self-center pb-7">
-            <TrendingCarousel initialSlides={initialSlides} />
+          {/* Header row — brand and the studio line, as on the web column. */}
+          <View className="flex-row items-center justify-between gap-3 px-5 pt-6 pb-2">
+            <View className="flex-row items-center gap-2">
+              <View
+                className="size-7 items-center justify-center"
+                style={{ borderRadius: 0.55 * 16, backgroundColor: accent }}
+              >
+                <Icon name="music" size={14} color={accentForeground} strokeWidth={2.2} />
+              </View>
+              <Text className="text-xs font-bold uppercase tracking-[2.4px] text-foreground">
+                ZYRAVA
+              </Text>
+            </View>
+            <Text className="text-[10px] font-medium uppercase tracking-[1.6px] text-faint-foreground">
+              Private listening studio
+            </Text>
           </View>
 
-          <View className="w-full max-w-sm self-center py-10">
-            <Text className="text-[10px] font-semibold uppercase tracking-[1.8px] text-brand">
-              {isRegister ? "Create your account" : "Welcome back"}
-            </Text>
-            <Text className="mt-2 text-[2rem] font-bold leading-[35px] tracking-[-0.8px] text-foreground">
-              {isRegister ? "Join the studio." : "Sign in to ZYRAVA."}
-            </Text>
-            <Text className="mt-2 text-sm text-muted" style={{ lineHeight: 20 }}>
-              {isRegister
-                ? "One account for your queue, saved mixes and the console."
-                : "Your queue and saved mixes are waiting."}
-            </Text>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroller}>
+            {/* The mobile variant's trending card sits above the form. */}
+            <View className="w-full max-w-sm self-center pb-7">
+              {personalWelcome ? (
+                <View
+                  style={{
+                    backgroundColor: welcome.config.surface,
+                    borderRadius: 24,
+                    padding: 20,
+                    alignItems: "center",
+                  }}
+                >
+                  <Animation id="personal-header" style={{ width: 240, height: 180 }} />
+                  <Text style={{ color: welcome.config.text, fontSize: 22, fontWeight: "700" }}>
+                    Welcome back, Baava
+                  </Text>
+                  <Text
+                    style={{
+                      color: welcome.config.accent,
+                      fontSize: 12,
+                      textAlign: "center",
+                      marginTop: 12,
+                    }}
+                  >
+                    Crafted with love for Vimitha — my Baava.
+                  </Text>
+                </View>
+              ) : (
+                <TrendingCarousel initialSlides={initialSlides} />
+              )}
+            </View>
 
-            <View className="mt-7 gap-4">
-              {isRegister ? (
-                <>
-                  {/* Register: which credential opens the account. */}
-                  <View className="flex-row gap-1 rounded-xl border border-separator bg-surface p-1">
-                    {(["email", "phone"] as const).map((option) => (
-                      <Pressable
-                        key={option}
-                        onPress={() => {
-                          setMethod(option);
-                          setErrors({});
-                        }}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: method === option }}
-                        className={cn(
-                          "h-9 flex-1 flex-row items-center justify-center gap-2 rounded-lg text-xs font-semibold",
-                          method === option
-                            ? "bg-accent text-accent-foreground"
-                            : "text-muted",
-                        )}
-                      >
-                        {option === "email" ? (
-                          <Mail
-                            size={14}
-                            color={method === option ? accentForeground : muted}
-                          />
-                        ) : (
-                          <Phone
-                            size={14}
-                            color={method === option ? accentForeground : muted}
-                          />
-                        )}
-                        <Text
-                          style={{
-                            color: method === option ? accentForeground : muted,
-                            fontSize: 12,
-                            fontWeight: "600",
+            <View className="w-full max-w-sm self-center py-10">
+              <Text className="text-[10px] font-semibold uppercase tracking-[1.8px] text-brand">
+                {isRegister ? "Create your account" : "Welcome back"}
+              </Text>
+              <Text className="mt-2 text-[2rem] font-bold leading-[35px] tracking-[-0.8px] text-foreground">
+                {isRegister ? "Join the studio." : "Sign in to ZYRAVA."}
+              </Text>
+              <Text className="mt-2 text-sm text-muted" style={{ lineHeight: 20 }}>
+                {isRegister
+                  ? "One account for your queue, saved mixes and the console."
+                  : "Your queue and saved mixes are waiting."}
+              </Text>
+
+              <View className="mt-7 gap-4">
+                {isRegister ? (
+                  <>
+                    {/* Register: which credential opens the account. */}
+                    <View className="flex-row gap-1 rounded-xl border border-separator bg-surface p-1">
+                      {(["email", "phone"] as const).map((option) => (
+                        <Pressable
+                          key={option}
+                          onPress={() => {
+                            setMethod(option);
+                            setErrors({});
                           }}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: method === option }}
+                          className={cn(
+                            "h-9 flex-1 flex-row items-center justify-center gap-2 rounded-lg text-xs font-semibold",
+                            method === option ? "bg-accent text-accent-foreground" : "text-muted"
+                          )}
                         >
-                          {option === "email" ? "Email" : "Phone"}
-                        </Text>
-                      </Pressable>
-                    ))}
-                  </View>
+                          {option === "email" ? (
+                            <Mail size={14} color={method === option ? accentForeground : muted} />
+                          ) : (
+                            <Phone size={14} color={method === option ? accentForeground : muted} />
+                          )}
+                          <Text
+                            style={{
+                              color: method === option ? accentForeground : muted,
+                              fontSize: 12,
+                              fontWeight: "600",
+                            }}
+                          >
+                            {option === "email" ? "Email" : "Phone"}
+                          </Text>
+                        </Pressable>
+                      ))}
+                    </View>
 
+                    <View className="gap-1.5">
+                      {label("Name", "(optional)")}
+                      <View className="relative">
+                        <View pointerEvents="none" style={styles.leadingIcon}>
+                          <User size={16} color={muted} />
+                        </View>
+                        <Input
+                          type="text"
+                          value={name}
+                          onChange={(event) => setName(event.target.value)}
+                          autoComplete="name"
+                          placeholder="Your name"
+                          className="h-11 w-full rounded-xl ps-10"
+                          aria-invalid={Boolean(errors.name)}
+                        />
+                      </View>
+                      {fieldError("name")}
+                    </View>
+
+                    {method === "email" ? (
+                      <View className="gap-1.5">
+                        {label("Email")}
+                        <View className="relative">
+                          <View pointerEvents="none" style={styles.leadingIcon}>
+                            <Mail size={16} color={muted} />
+                          </View>
+                          <Input
+                            type="email"
+                            value={email}
+                            onChange={(event) => setEmail(event.target.value)}
+                            autoComplete="email"
+                            placeholder="you@example.com"
+                            className="h-11 w-full rounded-xl ps-10"
+                            aria-invalid={Boolean(errors.email)}
+                          />
+                        </View>
+                        {fieldError("email")}
+                      </View>
+                    ) : (
+                      <View className="gap-1.5">
+                        {label("Phone number")}
+                        <View className="relative">
+                          <View pointerEvents="none" style={styles.leadingIcon}>
+                            <Phone size={16} color={muted} />
+                          </View>
+                          <Input
+                            type="tel"
+                            value={phone}
+                            onChange={(event) => setPhone(event.target.value)}
+                            autoComplete="tel"
+                            placeholder="+91 98765 43210"
+                            className="h-11 w-full rounded-xl ps-10"
+                            aria-invalid={Boolean(errors.phone)}
+                          />
+                        </View>
+                        {fieldError("phone")}
+                      </View>
+                    )}
+                  </>
+                ) : (
                   <View className="gap-1.5">
-                    {label("Name", "(optional)")}
+                    {label("Email or phone")}
                     <View className="relative">
                       <View pointerEvents="none" style={styles.leadingIcon}>
-                        <User size={16} color={muted} />
+                        <Mail size={16} color={muted} />
                       </View>
                       <Input
                         type="text"
-                        value={name}
-                        onChange={(event) => setName(event.target.value)}
-                        autoComplete="name"
-                        placeholder="Your name"
+                        value={identifier}
+                        onChange={(event) => setIdentifier(event.target.value)}
+                        autoComplete="username"
+                        placeholder="you@example.com or +91…"
                         className="h-11 w-full rounded-xl ps-10"
-                        aria-invalid={Boolean(errors.name)}
+                        aria-invalid={Boolean(errors.identifier)}
                       />
                     </View>
-                    {fieldError("name")}
+                    {fieldError("identifier")}
                   </View>
+                )}
 
-                  {method === "email" ? (
-                    <View className="gap-1.5">
-                      {label("Email")}
-                      <View className="relative">
-                        <View pointerEvents="none" style={styles.leadingIcon}>
-                          <Mail size={16} color={muted} />
-                        </View>
-                        <Input
-                          type="email"
-                          value={email}
-                          onChange={(event) => setEmail(event.target.value)}
-                          autoComplete="email"
-                          placeholder="you@example.com"
-                          className="h-11 w-full rounded-xl ps-10"
-                          aria-invalid={Boolean(errors.email)}
-                        />
-                      </View>
-                      {fieldError("email")}
-                    </View>
-                  ) : (
-                    <View className="gap-1.5">
-                      {label("Phone number")}
-                      <View className="relative">
-                        <View pointerEvents="none" style={styles.leadingIcon}>
-                          <Phone size={16} color={muted} />
-                        </View>
-                        <Input
-                          type="tel"
-                          value={phone}
-                          onChange={(event) => setPhone(event.target.value)}
-                          autoComplete="tel"
-                          placeholder="+91 98765 43210"
-                          className="h-11 w-full rounded-xl ps-10"
-                          aria-invalid={Boolean(errors.phone)}
-                        />
-                      </View>
-                      {fieldError("phone")}
-                    </View>
-                  )}
-                </>
-              ) : (
                 <View className="gap-1.5">
-                  {label("Email or phone")}
+                  {label("Password")}
                   <View className="relative">
                     <View pointerEvents="none" style={styles.leadingIcon}>
-                      <Mail size={16} color={muted} />
+                      <Lock size={16} color={muted} />
                     </View>
                     <Input
-                      type="text"
-                      value={identifier}
-                      onChange={(event) => setIdentifier(event.target.value)}
-                      autoComplete="username"
-                      placeholder="you@example.com or +91…"
-                      className="h-11 w-full rounded-xl ps-10"
-                      aria-invalid={Boolean(errors.identifier)}
+                      type={showPassword ? "text" : "password"}
+                      value={password}
+                      onChange={(event) => setPassword(event.target.value)}
+                      autoComplete={isRegister ? "new-password" : "current-password"}
+                      placeholder={isRegister ? "At least 8 characters" : "Your password"}
+                      className="h-11 w-full rounded-xl ps-10 pe-11"
+                      aria-invalid={Boolean(errors.password)}
+                      /* The native stand-in for pressing Enter in the web form. */
+                      returnKeyType="go"
+                      onSubmitEditing={() => void submit()}
                     />
+                    <Pressable
+                      onPress={() => setShowPassword((visible) => !visible)}
+                      accessibilityRole="button"
+                      accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                      className="absolute end-1.5 size-8 items-center justify-center rounded-lg"
+                      style={{ top: 6 }}
+                    >
+                      {showPassword ? (
+                        <EyeOff size={16} color={muted} />
+                      ) : (
+                        <Eye size={16} color={muted} />
+                      )}
+                    </Pressable>
                   </View>
-                  {fieldError("identifier")}
+                  {fieldError("password")}
                 </View>
-              )}
 
-              <View className="gap-1.5">
-                {label("Password")}
-                <View className="relative">
-                  <View pointerEvents="none" style={styles.leadingIcon}>
-                    <Lock size={16} color={muted} />
-                  </View>
-                  <Input
-                    type={showPassword ? "text" : "password"}
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                    autoComplete={isRegister ? "new-password" : "current-password"}
-                    placeholder={isRegister ? "At least 8 characters" : "Your password"}
-                    className="h-11 w-full rounded-xl ps-10 pe-11"
-                    aria-invalid={Boolean(errors.password)}
-                    /* The native stand-in for pressing Enter in the web form. */
-                    returnKeyType="go"
-                    onSubmitEditing={() => void submit()}
-                  />
-                  <Pressable
-                    onPress={() => setShowPassword((visible) => !visible)}
-                    accessibilityRole="button"
-                    accessibilityLabel={showPassword ? "Hide password" : "Show password"}
-                    className="absolute end-1.5 size-8 items-center justify-center rounded-lg"
-                    style={{ top: 6 }}
-                  >
-                    {showPassword ? (
-                      <EyeOff size={16} color={muted} />
-                    ) : (
-                      <Eye size={16} color={muted} />
+                <Pressable
+                  onPress={() => setRemember((value) => !value)}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: remember }}
+                  className="flex-row items-center gap-2.5 self-start"
+                >
+                  <View
+                    className={cn(
+                      "size-4 items-center justify-center border border-separator bg-surface",
+                      remember && "bg-accent"
                     )}
-                  </Pressable>
-                </View>
-                {fieldError("password")}
+                  >
+                    {remember ? <Check size={12} color={accentForeground} strokeWidth={3} /> : null}
+                  </View>
+                  <Text className="text-xs font-medium text-muted">
+                    Remember me <Text className="text-faint-foreground">for 30 days</Text>
+                  </Text>
+                </Pressable>
+
+                {formError ? (
+                  <View
+                    accessibilityRole="alert"
+                    className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2"
+                  >
+                    <Text className="text-xs font-medium text-danger-soft-foreground">
+                      {formError}
+                    </Text>
+                  </View>
+                ) : null}
+
+                <ClickButton
+                  onPress={() => void submit()}
+                  loading={busy || status === "loading"}
+                  className="h-11 w-full rounded-none text-[13px] font-semibold"
+                >
+                  {busy || status === "loading"
+                    ? "One moment…"
+                    : isRegister
+                      ? "Create account"
+                      : "Sign in"}
+                </ClickButton>
               </View>
 
-              <Pressable
-                onPress={() => setRemember((value) => !value)}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: remember }}
-                className="flex-row items-center gap-2.5 self-start"
-              >
-                <View
-                  className={cn(
-                    "size-4 items-center justify-center border border-separator bg-surface",
-                    remember && "bg-accent",
-                  )}
+              <Text className="mt-6 text-center text-xs text-muted">
+                {isRegister ? "Already have an account?" : "New to ZYRAVA?"}{" "}
+                <Text
+                  onPress={() => router.push(isRegister ? "/login" : "/register")}
+                  className="font-semibold text-brand"
                 >
-                  {remember ? <Check size={12} color={accentForeground} strokeWidth={3} /> : null}
-                </View>
-                <Text className="text-xs font-medium text-muted">
-                  Remember me{" "}
-                  <Text className="text-faint-foreground">for 30 days</Text>
+                  {isRegister ? "Sign in" : "Create one"}
                 </Text>
-              </Pressable>
-
-              {formError ? (
-                <View
-                  accessibilityRole="alert"
-                  className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2"
-                >
-                  <Text className="text-xs font-medium text-danger-soft-foreground">{formError}</Text>
-                </View>
-              ) : null}
-
-              <ClickButton
-                onPress={() => void submit()}
-                loading={busy}
-                className="h-11 w-full rounded-none text-[13px] font-semibold"
-              >
-                {busy ? "One moment…" : isRegister ? "Create account" : "Sign in"}
-              </ClickButton>
-            </View>
-
-            <Text className="mt-6 text-center text-xs text-muted">
-              {isRegister ? "Already have an account?" : "New to ZYRAVA?"}{" "}
-              <Text
-                onPress={() => router.push(isRegister ? "/login" : "/register")}
-                className="font-semibold text-brand"
-              >
-                {isRegister ? "Sign in" : "Create one"}
               </Text>
-            </Text>
-          </View>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+      {busy || status === "loading" ? (
+        <View style={StyleSheet.absoluteFill}>
+          <AuthLoadingScreen
+            welcome={
+              welcome?.identifier.toLowerCase() === identifier.trim().toLowerCase() ? welcome : null
+            }
+          />
+        </View>
+      ) : null}
+    </View>
   );
 }
 

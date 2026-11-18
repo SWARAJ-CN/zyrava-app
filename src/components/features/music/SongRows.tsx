@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from "react";
-import { Image, Pressable, Text, View } from "react-native";
+import { memo, useState, type ReactNode } from "react";
+import { ActivityIndicator, Image, Pressable, Text, View } from "react-native";
 import Svg, { Circle } from "react-native-svg";
 import { useCSSVariable } from "uniwind";
 import { Icon } from "@/components/ui/icons";
@@ -49,24 +49,19 @@ function SaveRing({ value }: { value: number }) {
   const share = Math.min(1, Math.max(0, value));
   return (
     <View pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no">
-      <Svg
-        width={20}
-        height={20}
-        viewBox="0 0 20 20"
-        style={{ transform: [{ rotate: "-90deg" }] }}
-      >
-      <Circle cx={10} cy={10} r={radius} fill="none" strokeWidth={2} stroke={separator} />
-      <Circle
-        cx={10}
-        cy={10}
-        r={radius}
-        fill="none"
-        strokeWidth={2}
-        strokeLinecap="round"
-        stroke={accent}
-        strokeDasharray={`${ring}`}
-        strokeDashoffset={ring * (1 - share)}
-      />
+      <Svg width={20} height={20} viewBox="0 0 20 20" style={{ transform: [{ rotate: "-90deg" }] }}>
+        <Circle cx={10} cy={10} r={radius} fill="none" strokeWidth={2} stroke={separator} />
+        <Circle
+          cx={10}
+          cy={10}
+          r={radius}
+          fill="none"
+          strokeWidth={2}
+          strokeLinecap="round"
+          stroke={accent}
+          strokeDasharray={`${ring}`}
+          strokeDashoffset={ring * (1 - share)}
+        />
       </Svg>
     </View>
   );
@@ -203,23 +198,39 @@ function RowActions({ song, device }: { song: Song; device: boolean }) {
  * filing one would write a row another device cannot resolve, so the account
  * actions step aside for a single "take it off" button.
  * ------------------------------------------------------------------ */
-export function SongRows({
+interface SongRowsProps {
+  songs: Song[];
+  label: string;
+  onRemove?: (song: Song) => void;
+  table?: boolean;
+  device?: boolean;
+  /** Keep in step with SongTableHead. */
+  album?: boolean;
+}
+
+export function SongRows({ songs, ...props }: SongRowsProps) {
+  return (
+    <View className={cn("flex-col gap-0.5", props.table && "pt-1")}>
+      {songs.map((song, index) => (
+        <SongRow key={song.id} {...props} song={song} index={index} songs={songs} />
+      ))}
+    </View>
+  );
+}
+
+/** A single row lets native virtualized lists mount only the visible songs.
+ * `songs` remains the entire collection so play/next keeps the full queue. */
+export const SongRow = memo(function SongRow({
+  song,
+  index,
   songs,
   label,
   onRemove,
   table = false,
   device = false,
   album = true,
-}: {
-  songs: Song[];
-  label: string;
-  onRemove?: (song: Song) => void;
-  table?: boolean;
-  device?: boolean;
-  /** Keep in step with <SongTableHead album> or the columns drift apart. */
-  album?: boolean;
-}) {
-  const { startQueue, current, playing, togglePlay, visualizerReady, getAnalyser } =
+}: SongRowsProps & { song: Song; index: number }) {
+  const { startQueue, current, playing, loading, togglePlay, visualizerReady, getAnalyser } =
     useMusicPlayer();
 
   /** Live bars, with the animated mimic when the analyser is kept away.
@@ -240,82 +251,73 @@ export function SongRows({
     </View>
   );
 
+  const active = current?.id === song.id;
+  const wave = renderWave;
   return (
-    <View className={cn("flex-col", table ? "gap-0.5 pt-1" : "gap-0.5")}>
-      {songs.map((song, index) => {
-        const active = current?.id === song.id;
-        const wave = renderWave;
+    <View
+      className={cn(
+        "flex-row items-center transition-colors",
+        table ? "gap-3 px-1 py-2.5" : "gap-1 px-1 py-2.5",
+        table && active && "bg-accent-soft"
+      )}
+    >
+      {table ? (
+        <IndexCell
+          song={song}
+          index={index}
+          songs={songs}
+          label={label}
+          active={active}
+          playing={playing}
+          loading={active && loading}
+          togglePlay={togglePlay}
+          startQueue={startQueue}
+          wave={wave}
+        />
+      ) : null}
 
-        return (
-          <View
-            key={song.id}
-            className={cn(
-              "flex-row items-center transition-colors",
-              table ? "gap-3 rounded-lg px-2 py-1.5" : "gap-1 rounded-lg px-2 py-1.5",
-              table && active && "bg-accent-soft"
-            )}
+      <ArtAndTitle
+        song={song}
+        label={label}
+        index={index}
+        songs={songs}
+        table={table}
+        active={active}
+        loading={active && loading}
+        startQueue={startQueue}
+      />
+
+      {table && album ? (
+        <Text numberOfLines={1} className="hidden min-w-0 flex-1 text-[11px] text-muted lg:block">
+          {song.album || "—"}
+        </Text>
+      ) : null}
+
+      <Text
+        className={cn(
+          "flex-none text-[11px] tabular-nums text-muted",
+          table ? "block" : "hidden sm:block"
+        )}
+      >
+        {formatSeconds(song.duration)}
+      </Text>
+
+      <View className={cn("flex-row items-center", table ? "flex-none gap-1" : "gap-0")}>
+        <RowActions song={song} device={device} />
+        {onRemove ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => onRemove(song)}
+            accessibilityLabel={`Remove ${song.title}`}
+            className="size-8 flex-none items-center justify-center rounded-full text-faint-foreground transition-colors active:bg-surface-secondary active:text-danger"
           >
-            {table ? (
-              <IndexCell
-                song={song}
-                index={index}
-                songs={songs}
-                label={label}
-                active={active}
-                playing={playing}
-                togglePlay={togglePlay}
-                startQueue={startQueue}
-                wave={wave}
-              />
-            ) : null}
-
-            <ArtAndTitle
-              song={song}
-              label={label}
-              index={index}
-              songs={songs}
-              table={table}
-              active={active}
-              startQueue={startQueue}
-            />
-
-            {table && album ? (
-              <Text
-                numberOfLines={1}
-                className="hidden min-w-0 flex-1 text-[11px] text-muted lg:block"
-              >
-                {song.album || "—"}
-              </Text>
-            ) : null}
-
-            <Text
-              className={cn(
-                "flex-none text-[11px] tabular-nums text-muted",
-                table ? "block" : "hidden sm:block"
-              )}
-            >
-              {formatSeconds(song.duration)}
-            </Text>
-
-            <View className={cn("flex-row items-center", table ? "flex-none gap-1" : "gap-0")}>
-              <RowActions song={song} device={device} />
-              {onRemove ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => onRemove(song)}
-                  accessibilityLabel={`Remove ${song.title}`}
-                  className="size-8 flex-none items-center justify-center rounded-full text-faint-foreground transition-colors active:bg-surface-secondary active:text-danger"
-                >
-                  <Icon name={table ? "trash" : "x"} className="size-4" />
-                </Pressable>
-              ) : null}
-            </View>
-          </View>
-        );
-      })}
+            <Icon name={table ? "trash" : "x"} className="size-4" />
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
-}
+});
 
 /**
  * The numbered cell whose index becomes a play/pause button while the row is
@@ -329,6 +331,7 @@ function IndexCell({
   label,
   active,
   playing,
+  loading,
   togglePlay,
   startQueue,
   wave,
@@ -339,6 +342,7 @@ function IndexCell({
   label: string;
   active: boolean;
   playing: boolean;
+  loading: boolean;
   togglePlay: () => void;
   startQueue: (list: Song[], label: string, position: number) => void;
   wave: (className: string, tone: string) => ReactNode;
@@ -347,7 +351,9 @@ function IndexCell({
 
   return (
     <View className="w-6 flex-none items-center justify-center">
-      {active && playing ? (
+      {loading ? (
+        <ActivityIndicator size="small" accessibilityLabel={`Loading ${song.title}`} />
+      ) : active && playing ? (
         <Pressable
           accessibilityRole="button"
           onPress={togglePlay}
@@ -392,6 +398,7 @@ function ArtAndTitle({
   songs,
   table,
   active,
+  loading,
   startQueue,
 }: {
   song: Song;
@@ -400,6 +407,7 @@ function ArtAndTitle({
   songs: Song[];
   table: boolean;
   active: boolean;
+  loading: boolean;
   startQueue: (list: Song[], label: string, position: number) => void;
 }) {
   /** The web dims a translucent play badge over the cover on hover. */
@@ -412,9 +420,10 @@ function ArtAndTitle({
       onPressIn={() => setPressed(true)}
       onPressOut={() => setPressed(false)}
       accessibilityLabel={`Play ${song.title} by ${song.artist}`}
+      accessibilityState={{ busy: loading }}
       className="flex min-w-0 flex-1 flex-row items-center gap-3"
     >
-      <View className="relative size-11 flex-none overflow-hidden rounded-lg bg-surface-muted">
+      <View className="relative size-11 flex-none overflow-hidden bg-surface-muted">
         {song.image ? (
           <Image
             source={{ uri: song.image }}
@@ -424,7 +433,15 @@ function ArtAndTitle({
         ) : (
           <Icon name="music" className="m-auto size-4 text-faint-foreground" />
         )}
-        {!table ? (
+        {loading ? (
+          <View className="absolute inset-0 items-center justify-center bg-black/45">
+            <ActivityIndicator
+              size="small"
+              color="#fff"
+              accessibilityLabel={`Loading ${song.title}`}
+            />
+          </View>
+        ) : !table ? (
           <View
             className={cn(
               "absolute inset-0 items-center justify-center bg-black/45 transition-opacity",

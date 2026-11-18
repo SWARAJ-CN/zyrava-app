@@ -1,13 +1,7 @@
 import { matchesRegions, matchesVibe, type Vibe } from "@/components/features/music/filters";
 import type { Song } from "@/lib/saavn";
 
-/** Words in a free-text query, lowercased and stripped of punctuation. */
-function queryWords(query: string): string[] {
-  return query
-    .toLowerCase()
-    .split(/[^\p{L}\p{N}]+/gu)
-    .filter((word) => word.length > 1);
-}
+import { songSearchScore } from "./search-ranking";
 
 export interface RankingContext {
   /** Typed search phrase, or "" when browsing a region. */
@@ -21,29 +15,19 @@ export interface RankingContext {
 /**
  * Relevance-first ranking for a pooled set of results.
  *
- * 1. typed words count most when they appear in the title (+5) and less in
- *    artist/album (+2); a title containing every word is an exact hit (+6)
+ * 1. typed queries use the shared title/artist and recording-version scorer
  * 2. each checked vibe earns +3 and a matching language +2
  * 3. ties keep the catalogue's own order, so plain region browsing is stable
- * 4. an artist cap (default 2) spreads the page across voices; capped tracks
- *    still appear at the end if there is room
+ * 4. browsing caps artists at two; named searches keep relevance order
  */
 export function rankSongs(songs: Song[], context: RankingContext = {}): Song[] {
-  const words = queryWords(context.query ?? "");
+  const query = context.query?.trim() ?? "";
   const vibes = context.vibes ?? [];
   const regions = context.regionLabels ?? [];
-  const artistCap = context.artistCap ?? 2;
+  const artistCap = context.artistCap ?? (query ? Number.POSITIVE_INFINITY : 2);
 
   const scored = songs.map((song, position) => {
-    const title = song.title.toLowerCase();
-    const haystack = `${song.title} ${song.artist} ${song.album}`.toLowerCase();
-    let score = 0;
-
-    for (const word of words) {
-      if (title.includes(word)) score += 5;
-      else if (haystack.includes(word)) score += 2;
-    }
-    if (words.length > 0 && words.every((word) => title.includes(word))) score += 6;
+    let score = query ? songSearchScore(song, query) : 0;
     for (const vibe of vibes) {
       if (matchesVibe(song, vibe)) score += 3;
     }

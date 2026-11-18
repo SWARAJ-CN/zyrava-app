@@ -23,6 +23,7 @@ export function CollectionHero({
   glyph = "list",
   tone = "brand",
   flush = false,
+  square = true,
   children,
 }: {
   eyebrow: string;
@@ -33,6 +34,8 @@ export function CollectionHero({
   tone?: "brand" | "plain";
   /** Bleeds to the container's edges — for headers inside a dialog. */
   flush?: boolean;
+  /** Square surfaces for collections that do not use rounded artwork/cards. */
+  square?: boolean;
   children?: ReactNode;
 }) {
   const { theme } = useUniwind();
@@ -41,7 +44,8 @@ export function CollectionHero({
     <View
       className={cn(
         "relative overflow-hidden px-4 pb-5 pt-6 sm:px-6",
-        flush ? "border-b border-separator" : "rounded-xl border border-separator",
+        flush && "border-b border-separator",
+        !flush && (square ? "rounded-none" : "rounded-xl"),
         tone === "brand" ? "bg-surface" : "bg-surface-secondary"
       )}
     >
@@ -58,7 +62,12 @@ export function CollectionHero({
         />
       ) : null}
       <View className="flex-row items-end gap-4">
-        <View className="relative size-24 flex-none overflow-hidden rounded-lg border border-separator bg-surface-secondary shadow-field sm:size-28">
+        <View
+          className={cn(
+            "relative size-24 flex-none overflow-hidden bg-surface-secondary sm:size-28",
+            square ? "rounded-none" : "rounded-lg"
+          )}
+        >
           {image ? (
             <Image
               source={{ uri: image }}

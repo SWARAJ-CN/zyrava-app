@@ -1,6 +1,16 @@
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { usePanelBackHandler } from "@/hooks/usePanelBackHandler";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PanResponder, type HostInstance } from "react-native";
-import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  StyleSheet,
+  PanResponder,
+  type HostInstance,
+  Image,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import Svg, { Circle, Line, Path, RadialGradient, Stop } from "react-native-svg";
 import { LinearGradient } from "expo-linear-gradient";
 import { Slider } from "heroui-native";
@@ -16,12 +26,12 @@ import {
   FX_ORDER,
   SPATIAL_MODES,
   useMusicPlayer,
+  usePlaybackProgress,
   type EqPreset,
   type FxName,
   type SpatialMode,
 } from "@/components/providers/MusicPlayerProvider";
 import { PADS, type PadName } from "@/lib/dj/pads";
-import { hasAdvancedAudio } from "@/lib/audio-engine";
 import type { Song } from "@/lib/saavn";
 
 /** heroui hands Slider changes as `number | number[]` — we always ask one value. */
@@ -72,8 +82,6 @@ export function MixerConsole() {
     index,
     current,
     playing,
-    progress,
-    duration,
     queueLabel,
     volume,
     setVolume,
@@ -84,6 +92,8 @@ export function MixerConsole() {
     rate,
     setRate,
     eqPreset,
+    processingError,
+    getGraphInfo,
     eqGains,
     setEqGains,
     applyPreset,
@@ -124,6 +134,11 @@ export function MixerConsole() {
     mixerOpen,
     setMixerOpen,
   } = useMusicPlayer();
+  const { progress, duration } = usePlaybackProgress();
+  const graph = getGraphInfo();
+  const processingSupported = graph.webAudio;
+  const spaceSupported = graph.spatial ?? graph.webAudio;
+  const eqSupported = graph.equalizer ?? graph.webAudio;
 
   /* Lit state for the pad board — each pad glows while it rings. */
   const [padGlow, setPadGlow] = useState<string | null>(null);
@@ -176,15 +191,28 @@ export function MixerConsole() {
   const partyEngaged =
     subDb >= 4 && loudnessOn && limiterOn && compAmt >= 0.4 && spatialMode === "wide";
 
+  const insets = useSafeAreaInsets();
+  usePanelBackHandler(mixerOpen, () => setMixerOpen(false));
   if (!mixerOpen) return null;
 
   return (
-    <View accessibilityViewIsModal className="absolute inset-0 z-50">
+    <View
+      accessibilityViewIsModal
+      style={[
+        StyleSheet.absoluteFill,
+        {
+          zIndex: 60,
+          paddingTop: insets.top,
+          paddingBottom: insets.bottom,
+          backgroundColor: "#05070b",
+        },
+      ]}
+    >
       {/* Console head — fixed so the room, the reset and the exit stay put. */}
       <LinearGradient
         colors={["#0d1018", "#05070b", "#020305"]}
         locations={[0, 0.58, 1]}
-        className="absolute inset-0"
+        style={StyleSheet.absoluteFill}
       />
       <View className="flex-row flex-none items-center gap-x-3 gap-y-2 border-b border-white/[0.06] bg-[#05070b]/85 px-3 py-3">
         <View
@@ -237,17 +265,22 @@ export function MixerConsole() {
         {/* ── Expo Go notice — the graph-backed stages are inactive, not
             removed: every control stays, playback still runs, and the dev
             build lights the rest of the room up. ── */}
-        {!hasAdvancedAudio ? (
+        {!processingSupported ? (
           <View className="rounded-xl border border-amber-400/25 bg-amber-400/[0.07] px-4 py-3">
             <Text className="text-[11px] font-bold uppercase tracking-[0.14em] text-amber-300/90">
-              Expo Go — studio processing off
+              Expo Go — Audio effects
             </Text>
             <Text className="mt-1 text-xs leading-4 text-white/60">
-              Playback, queue and transport run normally. EQ, FX rack, spatial
-              modes, pads and metering need the ZYRAVA dev build — install it
-              (see README) to unlock them.
+              Audio effects works while the app is open. Enabling EQ loads the track before
+              playback. The studio FX rack, pads and metering need the installed ZYRAVA audio
+              engine.
             </Text>
           </View>
+        ) : null}
+        {processingError ? (
+          <Text accessibilityRole="alert" className="px-3 py-2 text-sm text-amber-300">
+            {processingError}
+          </Text>
         ) : null}
         {/* ── Deck: artwork, VFD readout, transport ── */}
         <View className={cn(PANEL, "p-4")}>
@@ -780,6 +813,7 @@ export function MixerConsole() {
               </Text>
             </View>
             <EqPresetMenu
+              disabled={!eqSupported}
               value={eqPreset}
               onPick={(label) => {
                 if (label === "Custom") {
@@ -802,6 +836,7 @@ export function MixerConsole() {
               <FaderStrip
                 key={band.frequency}
                 label={band.label}
+                disabled={!eqSupported}
                 value={eqGains[bandIndex] ?? 0}
                 onChange={(value) => {
                   const gains = [...eqGains];
@@ -827,7 +862,8 @@ export function MixerConsole() {
                   key={mode.value}
                   accessibilityRole="button"
                   accessibilityLabel={mode.hint}
-                  accessibilityState={{ selected: engaged }}
+                  disabled={!spaceSupported}
+                  accessibilityState={{ selected: engaged, disabled: !spaceSupported }}
                   onPress={() => setSpatialMode(mode.value as SpatialMode)}
                   className={cn(
                     "min-h-14 w-[31%] flex-grow basis-[31%] flex-col items-center justify-center gap-1.5 rounded-lg border px-1 py-2 transition-all duration-150",
@@ -1160,11 +1196,16 @@ function VUMeter({ getLevels, active }: { getLevels: () => [number, number]; act
     // Ballistics: rise fast, fall slow — the meter glides like needle gear
     // instead of twitching at raw frame-rate RMS.
     const smoothRef: [number, number] = [0, 0];
-    function loop() {
+    let lastSample = 0;
+    function loop(time: number) {
+      frame = requestAnimationFrame(loop);
+      if (time - lastSample < 1000 / 20) return;
+      const elapsed = Math.min(0.1, (time - lastSample) / 1000);
+      lastSample = time;
       const [l, r] = getLevels();
       // Clip catch: hold the red lamp 2.5s after the last overload.
       const peakRms = Math.max(l, r);
-      clipHoldRef.current = Math.min(clipHoldRef.current + (peakRms > 0.92 ? 1 : -0.016), 1);
+      clipHoldRef.current = Math.min(clipHoldRef.current + (peakRms > 0.92 ? 1 : -elapsed), 1);
       setClip(clipHoldRef.current > 0.2);
       // dB-ish scale: half-RootSquare mapping; 0.28 RMS ~ near full swing.
       const toMeter = (rms: number) => Math.min(1, Math.max(0, (Math.sqrt(rms) - 0.05) / 0.45));
@@ -1178,7 +1219,6 @@ function VUMeter({ getLevels, active }: { getLevels: () => [number, number]; act
         peaks: [peaksRef[0], peaksRef[1]],
         db: [l > 1e-4 ? 20 * Math.log10(l) : -Infinity, r > 1e-4 ? 20 * Math.log10(r) : -Infinity],
       });
-      frame = requestAnimationFrame(loop);
     }
     return () => cancelAnimationFrame(frame);
   }, [active, getLevels]);
@@ -1418,10 +1458,12 @@ function FaderStrip({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: number;
   onChange: (value: number) => void;
+  disabled?: boolean;
 }) {
   const trackRef = useRef<HostInstance | null>(null);
   const height = 152;
@@ -1433,6 +1475,8 @@ function FaderStrip({
   const fraction = (value - min) / (max - min);
   const dragRef = useRef(false);
   const lastTapRef = useRef(0);
+  const gestureRef = useRef(0);
+  const lastYRef = useRef(0);
   const boxRef = useRef({ top: 0 });
   /** Latest onChange — the responder lives for the whole mount, so it must
    *  never read a stale closure from the first render. */
@@ -1456,24 +1500,31 @@ function FaderStrip({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (_event, gestureState) => {
-        dragRef.current = true;
-        // The rail may have scrolled under the finger since the last layout —
-        // re-measure at the start of every drag (getBoundingClientRect twin).
-        trackRef.current?.measureInWindow((_x, y) => {
-          boxRef.current.top = y;
-          apply(gestureState.y0);
-        });
-        // Double-tap resets the band to 0 (the web's onDoubleClick).
+        const gesture = ++gestureRef.current;
         const now = Date.now();
-        if (now - lastTapRef.current < 300) {
+        if (lastTapRef.current > 0 && now - lastTapRef.current < 300) {
+          lastTapRef.current = 0;
           dragRef.current = false;
           onChangeRef.current(0);
+          return;
         }
         lastTapRef.current = now;
+        dragRef.current = true;
+        lastYRef.current = gestureState.y0;
+        trackRef.current?.measureInWindow((_x, y) => {
+          if (gesture !== gestureRef.current) return;
+          boxRef.current.top = y;
+          apply(lastYRef.current);
+        });
       },
       onPanResponderMove: (_event, gestureState) => {
         if (!dragRef.current) return;
+        lastYRef.current = gestureState.moveY;
         apply(gestureState.moveY);
+      },
+      onPanResponderTerminate: () => {
+        dragRef.current = false;
+        gestureRef.current += 1;
       },
       onPanResponderRelease: () => {
         dragRef.current = false;
@@ -1497,10 +1548,17 @@ function FaderStrip({
         ref={trackRef}
         accessibilityRole="adjustable"
         accessibilityLabel={`${label} Hz band`}
+        accessibilityState={{ disabled }}
         accessibilityValue={{ min, max, now: value }}
+        accessibilityActions={disabled ? [] : [{ name: "increment" }, { name: "decrement" }]}
+        onAccessibilityAction={(event) => {
+          if (disabled) return;
+          if (event.nativeEvent.actionName === "increment") onChange(Math.min(max, value + 0.5));
+          if (event.nativeEvent.actionName === "decrement") onChange(Math.max(min, value - 0.5));
+        }}
         className="relative w-8 rounded-md bg-black/45"
         style={{ height }}
-        {...panResponder.panHandlers}
+        {...(disabled ? {} : panResponder.panHandlers)}
       >
         {/* Graduated rail — geometry: 8px pads, 24px handle, value ↑ = dB ↑. */}
         <View className="absolute inset-x-1/2 top-2 bottom-2 w-1 -translate-x-1/2 rounded-full bg-white/10" />
@@ -1544,13 +1602,23 @@ function FaderStrip({
 
 /** The channel-EQ preset list — `<select>` has no native twin, so the button
  *  expands the options in place (Custom behaves exactly like the web). */
-function EqPresetMenu({ value, onPick }: { value: string; onPick: (label: string) => void }) {
+function EqPresetMenu({
+  value,
+  onPick,
+  disabled = false,
+}: {
+  value: string;
+  onPick: (label: string) => void;
+  disabled?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <View className="min-w-[10rem] flex-1">
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Equalizer preset"
+        disabled={disabled}
+        accessibilityState={{ disabled }}
         onPress={() => setOpen((v) => !v)}
         className="flex h-9 flex-row items-center justify-between rounded-lg border border-white/10 bg-black/35 px-2.5 active:border-white/25"
       >

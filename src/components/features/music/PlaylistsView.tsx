@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { Icon } from "@/components/ui/icons";
 import { ClickButton } from "@/components/ui/ClickButton";
@@ -44,31 +44,45 @@ export function PlaylistsView({ query }: { query: string }) {
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
+  // Activity pauses effects on a hidden tab. Keep both the result and any
+  // pending request so revealing the same query never restarts the network work.
+  const catalogueRequest = useRef<{
+    query: string;
+    promise: ReturnType<typeof searchPlaylists>;
+  } | null>(null);
+  const loadedQuery = useRef<string | null>(null);
   useEffect(() => {
+    if (loadedQuery.current === query) return;
     let alive = true;
-    /* The web deferred the reset a frame (setState-in-effect rule); the same
-       frame hop satisfies React 19 here and clears the previous render. */
-    const frame = requestAnimationFrame(() => {
+    async function loadCatalogue() {
+      await Promise.resolve();
+      if (!alive) return;
+      loadedQuery.current = null;
       setLoading(true);
       setError(null);
       setDetail(null);
-    });
-
-    searchPlaylists(query, 8)
-      .then((data) => {
+      if (catalogueRequest.current?.query !== query) {
+        catalogueRequest.current = { query, promise: searchPlaylists(query, 8) };
+      }
+      try {
+        const data = await catalogueRequest.current.promise;
         if (!data) throw new Error("Could not load playlists.");
-        if (alive) setApiLists(Array.isArray(data.playlists) ? data.playlists : []);
-      })
-      .catch((cause: unknown) => {
-        if (alive) setError(cause instanceof Error ? cause.message : "Could not load playlists.");
-      })
-      .finally(() => {
+        if (alive) {
+          loadedQuery.current = query;
+          setApiLists(Array.isArray(data.playlists) ? data.playlists : []);
+        }
+      } catch (cause) {
+        if (alive) {
+          catalogueRequest.current = null;
+          setError(cause instanceof Error ? cause.message : "Could not load playlists.");
+        }
+      } finally {
         if (alive) setLoading(false);
-      });
-
+      }
+    }
+    void loadCatalogue();
     return () => {
       alive = false;
-      cancelAnimationFrame(frame);
     };
   }, [query]);
 
@@ -167,7 +181,7 @@ export function PlaylistsView({ query }: { query: string }) {
       </View>
 
       {creating ? (
-        <View className="mt-4 rounded-xl border border-separator bg-surface p-3">
+        <View className="mt-4 bg-surface-secondary p-3">
           <View className="flex-col gap-1.5">
             <Text className="text-[10px] font-semibold uppercase tracking-wider text-muted">
               Playlist name
@@ -213,7 +227,7 @@ export function PlaylistsView({ query }: { query: string }) {
                   onPress={() => openMine(playlist.id)}
                   className="w-full text-left"
                 >
-                  <View className="relative aspect-square overflow-hidden rounded-xl border border-separator bg-surface-secondary">
+                  <View className="relative aspect-square overflow-hidden bg-surface-secondary">
                     {playlist.songs[0]?.image ? (
                       <Image
                         source={{ uri: playlist.songs[0].image }}
@@ -265,7 +279,7 @@ export function PlaylistsView({ query }: { query: string }) {
           </View>
         </View>
       ) : (
-        <Text className="mt-6 rounded-xl border border-dashed border-separator px-4 py-6 text-center text-xs text-muted">
+        <Text className="mt-6 px-4 py-6 text-center text-xs text-muted">
           No playlists yet. Create one above, then add songs with the + on any track.
         </Text>
       )}
@@ -303,7 +317,7 @@ export function PlaylistsView({ query }: { query: string }) {
                 accessibilityLabel={`Open playlist ${playlist.title}`}
                 className="w-[47%] flex-grow"
               >
-                <View className="relative aspect-square overflow-hidden rounded-xl border border-separator bg-surface-secondary">
+                <View className="relative aspect-square overflow-hidden bg-surface-secondary">
                   {playlist.image ? (
                     <Image
                       source={{ uri: playlist.image }}
@@ -337,7 +351,7 @@ export function PlaylistsView({ query }: { query: string }) {
             ))}
           </View>
         ) : (
-          <Text className="rounded-xl border border-dashed border-separator px-4 py-8 text-center text-xs text-muted">
+          <Text className="px-4 py-8 text-center text-xs text-muted">
             No catalogue playlists for this search.
           </Text>
         )}

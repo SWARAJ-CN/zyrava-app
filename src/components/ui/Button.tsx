@@ -1,4 +1,5 @@
 import {
+  Children,
   cloneElement,
   forwardRef,
   isValidElement,
@@ -186,7 +187,7 @@ function renderChildren(children: ReactNode, color: string, labelClassName?: str
       <HeroButton.Label className={labelClassName}>{children}</HeroButton.Label>
     );
   }
-  const nodes = Array.isArray(children) ? children : [children];
+  const nodes = Children.toArray(children);
   const elements = nodes.filter((node) => isValidElement(node));
   if (!elements.length) {
     // Pure text (possibly fragmented) — one Label keeps web typography.

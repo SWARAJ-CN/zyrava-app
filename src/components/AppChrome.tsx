@@ -1,4 +1,5 @@
-import { useSegments } from "expo-router";
+import { useCustomization } from "@/components/providers/CustomizationProvider";
+import { useRouter, useSegments } from "expo-router";
 import { SideBar } from "@/components/features/music/SideBar";
 import { MixerConsole } from "@/components/features/music/MixerConsole";
 import { NowPlayingPanel } from "@/components/features/music/NowPlayingPanel";
@@ -22,7 +23,14 @@ function currentRoute(segments: string[]): string {
  * the part they have not unlocked yet.
  */
 export function AppChrome() {
+  const { personal } = useCustomization();
   const segments = useSegments();
+  const router = useRouter();
+  const openSection = (section: string) =>
+    router.navigate({
+      pathname: "/",
+      params: { tab: "songs", section, visit: String(Date.now()) },
+    });
   const { status } = useAuth();
   const { isGuest } = useGuestLock();
   const route = currentRoute(segments);
@@ -32,12 +40,16 @@ export function AppChrome() {
      hides itself until its open flag flips (drawer/console/chat/bar). */
   return (
     <>
-      <SideBar />
-      {isGuest ? null : <MixerConsole />}
+      <SideBar
+        onBrowse={() => openSection("top")}
+        onRegions={() => openSection("region-library")}
+        onLibraryList={() => openSection("library-list")}
+      />
+      {isGuest || personal ? null : <MixerConsole />}
       {/* InstallSheet is a PWA-only surface: the native app is already on the
           home screen (see PwaProvider), so nothing renders in its place. */}
       <NowPlayingPanel />
-      <ChatPanel />
+      {!personal ? <ChatPanel /> : null}
       <StickyPlayerBar />
     </>
   );

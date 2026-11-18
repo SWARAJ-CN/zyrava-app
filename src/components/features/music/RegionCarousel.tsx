@@ -1,8 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type JSX } from "react";
+import { useCallback, useEffect, useState, type JSX } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Image } from "expo-image";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, {
+  cancelAnimation,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 
+import { useReduceMotion } from "@/hooks/useReduceMotion";
 import { Icon } from "@/components/ui/icons";
 import { REGIONS } from "./regions";
 import { cn } from "@/lib/cn";
@@ -41,7 +47,8 @@ export function RegionCarousel({
   onSelect,
 }: RegionCarouselProps): JSX.Element {
   const [index, setIndex] = useState(0);
-  const [paused, setPaused] = useState(false);
+  const [restRevision, setRestRevision] = useState(0);
+  const reducedMotion = useReduceMotion();
   const [width, setWidth] = useState(0);
   /** Region whose play button is mid-fetch. */
   const [busy, setBusy] = useState("");
@@ -53,8 +60,9 @@ export function RegionCarousel({
      web's 700 ms cubic-bezier(0.23,1,0.32,1) feel. */
   const offset = useSharedValue(0);
   useEffect(() => {
-    offset.value = withTiming(-(index * (width || 1)), { duration: 700 });
-  }, [index, width, offset]);
+    offset.value = withTiming(-(index * (width || 1)), { duration: reducedMotion ? 0 : 300 });
+    return () => cancelAnimation(offset);
+  }, [index, width, offset, reducedMotion]);
   const slideStyle = useAnimatedStyle(() => ({ transform: [{ translateX: offset.value }] }));
 
   /** Play straight from the carousel — loading state until the queue lands. */
@@ -64,32 +72,24 @@ export function RegionCarousel({
     void Promise.resolve(onPlay(label)).finally(() => setBusy(""));
   };
 
-  // Gentle autoplay; nothing rotates while the reader is interacting.
+  // Hiding the tab clears both timers; revealing it resumes from the same slide.
   useEffect(() => {
-    if (paused) return;
+    if (reducedMotion) return;
+    if (restRevision > 0) {
+      const timer = setTimeout(() => setRestRevision(0), 12_000);
+      return () => clearTimeout(timer);
+    }
     const timer = setInterval(() => setIndex((value) => (value + 1) % count), ROTATE_MS);
     return () => clearInterval(timer);
-  }, [paused, count]);
+  }, [restRevision, reducedMotion, count]);
 
-  // Any manual navigation rests the rotation briefly, like the web hover.
-  const restTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const rest = () => {
-    setPaused(true);
-    if (restTimer.current) clearTimeout(restTimer.current);
-    restTimer.current = setTimeout(() => setPaused(false), 12_000);
-  };
-  useEffect(
-    () => () => {
-      if (restTimer.current) clearTimeout(restTimer.current);
-    },
-    []
-  );
+  const rest = () => setRestRevision((value) => value + 1);
 
   return (
     <View
       accessibilityRole="summary"
       onLayout={(event) => setWidth(event.nativeEvent.layout.width)}
-      className="relative overflow-hidden rounded-xl border border-separator"
+      className="relative overflow-hidden"
       style={{ height: 190 }}
     >
       <Animated.View className="absolute inset-y-0 flex-row" style={slideStyle}>
@@ -100,7 +100,7 @@ export function RegionCarousel({
             className="relative h-full flex-none"
           >
             {/* Tone wash + readable shade — no full-bleed cover stretching */}
-            <View className="absolute inset-0" style={{ backgroundColor: region.tone }} />
+            <View className={cn("absolute inset-0", region.toneClassName)} />
             <Scrim className="absolute inset-0" direction="right" colors={SCRIM_STOPS.hero} />
 
             <View className="relative h-full flex-row items-center justify-between gap-4 p-5">
@@ -147,7 +147,7 @@ export function RegionCarousel({
               </View>
 
               {/* Square art card — crisp at any size, never stretched */}
-              <View className="aspect-square w-28 flex-none overflow-hidden rounded-lg border border-white/15 bg-black/30">
+              <View className="aspect-square w-28 flex-none overflow-hidden bg-black/30">
                 {covers[region.label] ? (
                   <Image
                     source={{ uri: covers[region.label] }}

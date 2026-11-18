@@ -1,7 +1,8 @@
 import { useEffect, useRef } from "react";
 import { AppState, Platform } from "react-native";
-import * as Notifications from "expo-notifications";
-import { AndroidImportance, SchedulableTriggerInputTypes } from "expo-notifications";
+import { getLocalNotifications } from "@/lib/local-notifications";
+import { SchedulableTriggerInputTypes } from "expo-notifications/build/Notifications.types";
+import { AndroidImportance } from "expo-notifications/build/NotificationChannelManager.types";
 import { getItem, setItem } from "@/lib/store";
 
 /** Inactivity before the first wake-up nudge. */
@@ -43,6 +44,8 @@ function messageSeed(): number {
  * opens the app — the same "one tap reopens the player" the web's data.url did.
  */
 async function push(body: string, at: number): Promise<void> {
+  const Notifications = getLocalNotifications();
+  if (!Notifications) return;
   try {
     await Notifications.cancelScheduledNotificationAsync(IDLE_TAG).catch(() => undefined);
     await Notifications.scheduleNotificationAsync({
@@ -50,6 +53,7 @@ async function push(body: string, at: number): Promise<void> {
       content: { title: "ZYRAVA", body, data: {} },
       trigger: {
         type: SchedulableTriggerInputTypes.DATE,
+        ...(Platform.OS === "android" ? { channelId: IDLE_TAG } : {}),
         date: new Date(Math.max(at, Date.now() + 1_000)),
       },
     });
@@ -74,6 +78,8 @@ export function IdleNotifier() {
   const lastNotifiedAtRef = useRef(0);
 
   useEffect(() => {
+    const Notifications = getLocalNotifications();
+    if (!Notifications) return;
     lastActivityRef.current = Date.now();
 
     /* Asking cold is a shot in the dark; the reader grants it once they have
@@ -84,7 +90,7 @@ export function IdleNotifier() {
       asked = true;
       void Notifications.getPermissionsAsync()
         .then(({ status }) => {
-          if (status === "undetermined") void Notifications.requestPermissionsAsync();
+          if (status === "undetermined") return Notifications.requestPermissionsAsync();
         })
         .catch(() => undefined);
     };

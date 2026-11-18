@@ -18,9 +18,23 @@
  * the same way off the cascade). Only two platform adjustments: values
  * the native colour resolver cannot evaluate lazily are written per
  * light/dark scope, and the font stack carries the RN-registered Inter
- * weight families (see src/lib/global-font.ts).
+ * weight families registered by src/lib/global-font.ts.
  * ------------------------------------------------------------------ */
 @theme inline static {
+  /* Resolve fonts in the stylesheet. Each native Inter weight is a separate
+     registered face; no runtime JSX interception or style flattening needed. */
+  --font-weight-*: initial;
+  --font-sans: "Inter_400Regular";
+  --font-thin: "Inter_100Thin";
+  --font-extralight: "Inter_200ExtraLight";
+  --font-light: "Inter_300Light";
+  --font-normal: "Inter_400Regular";
+  --font-medium: "Inter_500Medium";
+  --font-semibold: "Inter_600SemiBold";
+  --font-bold: "Inter_700Bold";
+  --font-extrabold: "Inter_800ExtraBold";
+  --font-black: "Inter_900Black";
+
   /* Surfaces */
   --color-surface-muted: var(--surface-secondary);
   --color-surface-inset: var(--surface-secondary);
@@ -138,7 +152,12 @@
       --accent-soft: color-mix(in oklab, var(--accent) 18%, transparent);
       --accent-soft-foreground: var(--accent);
 
-      --background: #17111c;
+      --background: #000000;
+      --surface: #101010;
+      --surface-secondary: #181818;
+      --surface-tertiary: #242424;
+      --overlay: #101010;
+      --field-background: #181818;
       --info: oklch(0.71 0.14 255);
 
       --dock-bg: color-mix(in oklch, var(--surface-secondary) 68%, var(--background));

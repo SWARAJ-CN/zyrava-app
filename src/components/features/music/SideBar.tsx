@@ -1,8 +1,27 @@
-import { useEffect, useMemo, useState } from "react";
-import { Dimensions, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useCustomization } from "@/components/providers/CustomizationProvider";
+import { useState } from "react";
+import {
+  StyleSheet,
+  useWindowDimensions,
+  Image,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Link } from "expo-router";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import { Link, useRouter } from "expo-router";
+import Animated, {
+  Easing,
+  FadeIn,
+  FadeOut,
+  SlideInLeft,
+  SlideOutLeft,
+  ReduceMotion,
+} from "react-native-reanimated";
+import { useCSSVariable } from "uniwind";
+import { usePanelBackHandler } from "@/hooks/usePanelBackHandler";
 import { Slider } from "heroui-native";
 import { cn } from "@/lib/cn";
 import { Icon } from "@/components/ui/icons";
@@ -19,6 +38,8 @@ import {
   EQ_PRESETS,
   SPATIAL_MODES,
   useMusicPlayer,
+  useMobileNavOpen,
+  usePlaybackProgress,
   type EqPreset,
   type SpatialMode,
 } from "@/components/providers/MusicPlayerProvider";
@@ -34,9 +55,8 @@ function sliderValue(value: number | number[]): number {
  * The web renders a persistent left rail (⇄ wide via keyboard M) plus a
  * phone <dialog> drawer. On mobile there is only the drawer: AppChrome keeps
  * this mounted and it slides in over a backdrop while `mobileNavOpen` is on
- * (the Reanimated spring mirrors framer-motion's stiffness 420 / damping 40;
- * the web's 260 ms DRAWER_MS exit delay is what "stay mounted, animate out"
- * gives us natively). Rail width, the dock-morph cross-fade, the matchMedia
+ * with short Reanimated enter/exit transitions on the native UI thread.
+ * Rail width, the dock-morph cross-fade, the matchMedia
  * resize-close and the "M" keydown handler are desktop affordances — the
  * setter survives (setSidebarWide), the key handler is dropped.
  *
@@ -77,8 +97,7 @@ const BROWSE_LINKS: {
 ];
 
 /** Rows share one rhythm so every list in the dock reads as a single column. */
-const ROW =
-  "flex h-9 w-full flex-row items-center gap-3 rounded-lg px-2.5 text-[13px] font-medium transition-colors";
+const ROW = "min-h-11 w-full flex-row items-center gap-3 rounded-xl px-3";
 
 /** Quiet uppercase heading above a group of controls. */
 function SectionLabel({ children }: { children: React.ReactNode }) {
@@ -128,6 +147,8 @@ function DockBody({
   onRegions?: () => void;
   onLibraryList?: () => void;
 }) {
+  const { personal } = useCustomization();
+  const router = useRouter();
   const [tab, setTab] = useState<DockTab>("browse");
   const [heavyPending, setHeavyPending] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -159,6 +180,7 @@ function DockBody({
     rate,
     setRate,
     eqPreset,
+    processingError,
     applyPreset,
     applyCustomPreset,
     spatialMode,
@@ -168,7 +190,6 @@ function DockBody({
     setSidebarWide,
     setMixerOpen,
     setMobileNavOpen,
-    listenedSeconds,
     sessionPlays,
     getGraphInfo,
   } = useMusicPlayer();
@@ -180,6 +201,8 @@ function DockBody({
 
   // Live graph facts re-read on every dashboard render.
   const graph = getGraphInfo();
+  const spaceSupported = graph.spatial ?? graph.webAudio;
+  const eqSupported = graph.equalizer ?? graph.webAudio;
 
   const choosePreset = (preset: EqPreset) => {
     if (preset.heavy && eqPreset !== preset.label) {
@@ -240,7 +263,7 @@ function DockBody({
         {wide ? (
           <>
             <View className="size-8 flex-none items-center justify-center rounded-[0.6rem] bg-accent text-accent-foreground">
-              <Icon name="music" className="size-4" strokeWidth={2.2} />
+              <Icon name="music" className="size-4 text-accent-foreground" strokeWidth={2.2} />
             </View>
             <View className="min-w-0 flex-1">
               <Text
@@ -254,7 +277,11 @@ function DockBody({
               </Text>
             </View>
             <DockIcon label={mobile ? "Close the dock" : "Collapse dock (M)"} onClick={closeDock}>
-              <Icon name={mobile ? "x" : "sidebar"} className="size-4" strokeWidth={1.9} />
+              <Icon
+                name={mobile ? "x" : "sidebar"}
+                className="size-4 text-muted"
+                strokeWidth={1.9}
+              />
             </DockIcon>
           </>
         ) : (
@@ -264,7 +291,7 @@ function DockBody({
             accessibilityLabel="Expand dock (M)"
             className="size-9 items-center justify-center rounded-[0.6rem] bg-accent text-accent-foreground transition-transform active:scale-95"
           >
-            <Icon name="music" className="size-4" strokeWidth={2.2} />
+            <Icon name="music" className="size-4 text-accent-foreground" strokeWidth={2.2} />
           </Pressable>
         )}
       </View>
@@ -275,10 +302,31 @@ function DockBody({
         accessibilityLabel="Dock sections"
         className={cn(
           "flex flex-none flex-col",
-          wide ? "gap-0.5 px-2.5 py-2.5" : "items-center gap-1 px-2 py-3"
+          wide ? "gap-1.5 px-3 py-3" : "items-center gap-1 px-2 py-3"
         )}
       >
-        {TABS.map((entry) => {
+        {!personal
+          ? (["customize", "payments"] as const).map((destination) => (
+              <Pressable
+                key={destination}
+                accessibilityRole="button"
+                onPress={() => {
+                  if (!requireAuth("tab")) return;
+                  setMobileNavOpen(false);
+                  router.navigate({ pathname: "/", params: { tab: destination } });
+                }}
+                className="h-11 flex-row items-center gap-3 px-3"
+              >
+                <Icon name={destination === "customize" ? "sliders" : "list"} size={18} />
+                <Text className="text-sm text-foreground">
+                  {destination === "customize" ? "Customize" : "Payments"}
+                </Text>
+              </Pressable>
+            ))
+          : null}
+        {TABS.filter(
+          (entry) => !personal || entry.value === "browse" || entry.value === "library"
+        ).map((entry) => {
           const active = entry.value === "chat" ? chatOpen : tab === entry.value;
           return (
             <Pressable
@@ -303,13 +351,13 @@ function DockBody({
                 if (!wide) setSidebarWide(true);
               }}
               className={cn(
-                "relative flex flex-row text-[13px] transition-colors duration-150",
+                "relative flex flex-row items-center text-[13px] transition-colors duration-150",
                 wide
                   ? cn(
-                      "h-10 w-full gap-3 rounded-lg px-2.5",
+                      "h-11 w-full gap-3 rounded-xl px-3",
                       active
-                        ? "bg-dock-active font-semibold text-foreground"
-                        : "font-medium text-muted active:bg-dock-hover active:text-foreground"
+                        ? "border border-separator bg-surface-secondary"
+                        : "border border-transparent active:bg-surface-secondary"
                     )
                   : cn(
                       "size-11 justify-center rounded-xl",
@@ -321,12 +369,22 @@ function DockBody({
             >
               <Icon
                 name={entry.icon}
-                className={cn("flex-none", wide ? "size-4.5" : "size-5", active && "text-brand")}
+                className={cn(
+                  "flex-none",
+                  wide ? "size-4.5" : "size-5",
+                  active ? "text-foreground" : "text-muted"
+                )}
                 strokeWidth={active ? 2.2 : 1.9}
               />
               {wide ? (
                 <>
-                  <Text numberOfLines={1} className="min-w-0 flex-1 truncate text-left">
+                  <Text
+                    numberOfLines={1}
+                    className={cn(
+                      "min-w-0 flex-1 text-[13px]",
+                      active ? "font-semibold text-foreground" : "font-medium text-muted"
+                    )}
+                  >
                     {entry.label}
                   </Text>
                   {entry.value === "chat" && chatBadge ? (
@@ -365,8 +423,14 @@ function DockBody({
                   onPress={() => go(link.id)}
                   className={cn(ROW, "text-muted active:bg-dock-hover active:text-foreground")}
                 >
-                  <Icon name={link.icon} className="size-4 flex-none" strokeWidth={1.9} />
-                  <Text className="truncate">{link.label}</Text>
+                  <Icon
+                    name={link.icon}
+                    className="size-4 flex-none text-muted"
+                    strokeWidth={1.9}
+                  />
+                  <Text className="flex-1 text-[13px] font-medium text-foreground">
+                    {link.label}
+                  </Text>
                 </Pressable>
               ))}
 
@@ -374,7 +438,10 @@ function DockBody({
 
               <Pressable
                 accessibilityRole="button"
-                onPress={() => setNowPlayingOpen(!nowPlayingOpen)}
+                onPress={() => {
+                  setNowPlayingOpen(!nowPlayingOpen);
+                  if (mobile) setMobileNavOpen(false);
+                }}
                 accessibilityState={{ selected: nowPlayingOpen }}
                 className={cn(
                   ROW,
@@ -388,19 +455,21 @@ function DockBody({
                   className={cn("size-4 flex-none", nowPlayingOpen && "text-brand")}
                   strokeWidth={nowPlayingOpen ? 2.1 : 1.9}
                 />
-                <Text className="truncate">Now playing panel</Text>
+                <Text className="flex-1 text-[13px] font-medium text-foreground">
+                  Now playing panel
+                </Text>
               </Pressable>
             </View>
           ) : null}
 
-          {tab === "dashboard" ? (
+          {!personal && tab === "dashboard" ? (
             <View className="flex-col gap-5">
               <View>
                 <SectionLabel>This session</SectionLabel>
                 {/* grid-cols-2 gap-px via a two-column wrap; dock-line shows
                     through the 1px gaps like the web's separator grid. */}
                 <View className="flex-row flex-wrap bg-dock-line overflow-hidden rounded-xl">
-                  <Stat label="Listening" value={formatRuntime(listenedSeconds)} />
+                  <ListeningStat />
                   <Stat
                     label="Queued"
                     value={`${queue.length || 0}`}
@@ -409,10 +478,10 @@ function DockBody({
                   <Stat label="Plays" value={`${sessionPlays}`} hint="this session" />
                   <Stat
                     label="Engine"
-                    value={graph.webAudio ? "Web Audio" : "Native"}
+                    value={graph.webAudio ? "Native DSP" : "Expo audio"}
                     hint={
                       graph.webAudio
-                        ? `${graph.sampleRate ?? 48} kHz · ${graph.channels ?? 2} ch`
+                        ? `${((graph.sampleRate ?? 48000) / 1000).toFixed(1)} kHz · ${graph.channels ?? 2} ch`
                         : "graph idle"
                     }
                   />
@@ -436,7 +505,9 @@ function DockBody({
                     },
                     {
                       head: "Output",
-                      tail: graph.webAudio ? `${graph.sampleRate ?? 48} kHz` : "element",
+                      tail: graph.webAudio
+                        ? `${((graph.sampleRate ?? 48000) / 1000).toFixed(1)} kHz`
+                        : "element",
                     },
                   ].map((row) => (
                     <View
@@ -483,9 +554,15 @@ function DockBody({
                   className={cn(ROW, "text-muted active:bg-dock-hover active:text-foreground")}
                 >
                   <View className="size-7 flex-none items-center justify-center rounded-full bg-danger-soft text-danger-soft-foreground">
-                    <Icon name="heart" className="size-3.5 fill-current" strokeWidth={1.8} />
+                    <Icon
+                      name="heart"
+                      className="size-3.5 fill-danger text-danger"
+                      strokeWidth={1.8}
+                    />
                   </View>
-                  <Text className="min-w-0 flex-1 truncate">Liked songs</Text>
+                  <Text className="min-w-0 flex-1 text-[13px] font-medium text-foreground">
+                    Liked songs
+                  </Text>
                   <Text className="flex-none text-[10px] font-medium tabular-nums text-faint-foreground">
                     {liked.length}
                   </Text>
@@ -560,8 +637,15 @@ function DockBody({
                           "min-w-0 flex-1 text-muted active:bg-dock-hover active:text-foreground"
                         )}
                       >
-                        <Icon name="list" className="size-4 flex-none" strokeWidth={1.9} />
-                        <Text numberOfLines={1} className="min-w-0 flex-1 truncate">
+                        <Icon
+                          name="list"
+                          className="size-4 flex-none text-muted"
+                          strokeWidth={1.9}
+                        />
+                        <Text
+                          numberOfLines={1}
+                          className="min-w-0 flex-1 text-[13px] font-medium text-foreground"
+                        >
                           {playlist.name}
                         </Text>
                         <Text className="flex-none text-[10px] tabular-nums text-faint-foreground">
@@ -575,7 +659,7 @@ function DockBody({
                           accessibilityLabel={`Add the playing song to ${playlist.name}`}
                           className="size-7 flex-none items-center justify-center rounded-md text-faint-foreground transition-colors active:bg-dock-hover active:text-foreground"
                         >
-                          <Icon name="plus" className="size-3.5" strokeWidth={2} />
+                          <Icon name="plus" className="size-3.5 text-muted" strokeWidth={2} />
                         </Pressable>
                       ) : null}
                       <Pressable
@@ -584,7 +668,7 @@ function DockBody({
                         accessibilityLabel={`Delete playlist ${playlist.name}`}
                         className="size-7 flex-none items-center justify-center rounded-md text-faint-foreground transition-colors active:bg-dock-hover"
                       >
-                        <Icon name="trash" className="size-3.5" strokeWidth={1.9} />
+                        <Icon name="trash" className="size-3.5 text-muted" strokeWidth={1.9} />
                       </Pressable>
                     </View>
                   ))}
@@ -605,7 +689,7 @@ function DockBody({
             </View>
           ) : null}
 
-          {tab === "mixer" ? (
+          {!personal && tab === "mixer" ? (
             <View className="flex-col gap-5">
               <View className="flex-col gap-2.5">
                 <View className="flex-row items-baseline justify-between gap-2 px-2.5">
@@ -680,11 +764,28 @@ function DockBody({
 
               <View>
                 <SectionLabel>Equalizer</SectionLabel>
+                {!eqSupported ? (
+                  <Text className="px-2.5 pb-2 text-xs text-muted">
+                    Starting audio effects. If controls stay unavailable, reload the app and update
+                    Android System WebView.
+                  </Text>
+                ) : !graph.webAudio ? (
+                  <Text className="px-2.5 pb-2 text-xs text-muted">
+                    EQ and Space · keep the app open. Changes apply to the playing track.
+                  </Text>
+                ) : null}
+                {processingError ? (
+                  <Text accessibilityRole="alert" className="px-2.5 pb-2 text-xs text-danger">
+                    {processingError}
+                  </Text>
+                ) : null}
                 {/* No <select> on native: the row expands in place — the web's
                     chevron affordance kept, Custom behaves exactly the same. */}
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => setPresetOpen((open) => !open)}
+                  disabled={!eqSupported}
+                  accessibilityState={{ disabled: !eqSupported }}
                   accessibilityLabel="Equalizer preset"
                   className="flex h-9 w-full flex-row items-center justify-between rounded-lg bg-surface-secondary/60 pl-2.5 pr-2.5 active:bg-surface-secondary"
                 >
@@ -729,12 +830,18 @@ function DockBody({
 
               <View>
                 <SectionLabel>Space</SectionLabel>
+                {!spaceSupported ? (
+                  <Text className="px-2.5 pb-2 text-xs text-muted">
+                    Space is unavailable while the effects player is starting or recovering.
+                  </Text>
+                ) : null}
                 <View className="flex-row flex-wrap gap-1">
                   {SPATIAL_MODES.map((mode) => (
                     <Chip
                       key={mode.value}
                       active={spatialMode === mode.value}
                       label={mode.hint}
+                      disabled={!spaceSupported}
                       onPress={() => setSpatialMode(mode.value as SpatialMode)}
                     >
                       {mode.label}
@@ -774,10 +881,13 @@ function DockBody({
           <>
             <Pressable
               accessibilityRole="button"
-              onPress={() => setNowPlayingOpen(!nowPlayingOpen)}
+              onPress={() => {
+                setNowPlayingOpen(!nowPlayingOpen);
+                if (mobile) setMobileNavOpen(false);
+              }}
               accessibilityState={{ selected: nowPlayingOpen }}
               accessibilityLabel={current ? `Now playing: ${current.title}` : "Now playing panel"}
-              className="flex w-full flex-row items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors active:bg-dock-hover"
+              className="w-full flex-row items-center gap-3 rounded-xl border border-separator bg-surface p-2.5 active:bg-surface-secondary"
             >
               <View className="relative size-8 flex-none items-center justify-center overflow-hidden rounded-md bg-surface">
                 <Icon name="music" className="size-3.5 text-faint-foreground" aria-hidden />
@@ -816,9 +926,11 @@ function DockBody({
                 <View aria-hidden className="h-9" />
               ) : authStatus === "authenticated" && user ? (
                 <View className="flex min-w-0 flex-row items-center gap-1">
-                  <Text className="size-7 flex-none items-center justify-center rounded-full bg-accent-soft text-[10px] font-bold uppercase text-brand">
-                    {accountInitial}
-                  </Text>
+                  <View className="size-8 flex-none items-center justify-center rounded-full border border-separator bg-surface-secondary">
+                    <Text className="text-xs font-bold uppercase text-foreground">
+                      {accountInitial}
+                    </Text>
+                  </View>
                   <Text
                     numberOfLines={1}
                     className="min-w-0 max-w-[7.5rem] truncate text-[11px] font-medium text-muted"
@@ -826,7 +938,7 @@ function DockBody({
                     {accountName}
                   </Text>
                   <DockIcon label="Sign out" onClick={() => void logout()}>
-                    <Icon name="log-out" className="size-4" strokeWidth={1.9} />
+                    <Icon name="log-out" className="size-4 text-muted" strokeWidth={1.9} />
                   </DockIcon>
                 </View>
               ) : (
@@ -847,7 +959,7 @@ function DockBody({
                 <DockIcon label={themeLabel} onClick={toggle}>
                   <Icon
                     name={resolved === "dark" ? "sun" : "moon"}
-                    className="size-4"
+                    className="size-4 text-muted"
                     strokeWidth={1.9}
                   />
                 </DockIcon>
@@ -859,7 +971,10 @@ function DockBody({
             {current?.image ? (
               <Pressable
                 accessibilityRole="button"
-                onPress={() => setNowPlayingOpen(!nowPlayingOpen)}
+                onPress={() => {
+                  setNowPlayingOpen(!nowPlayingOpen);
+                  if (mobile) setMobileNavOpen(false);
+                }}
                 accessibilityState={{ selected: nowPlayingOpen }}
                 accessibilityLabel="Now playing panel"
                 className="relative size-9 overflow-hidden rounded-lg bg-surface active:scale-95"
@@ -876,7 +991,7 @@ function DockBody({
                   {accountInitial}
                 </Text>
                 <DockIcon label="Sign out" onClick={() => void logout()}>
-                  <Icon name="log-out" className="size-4" strokeWidth={1.9} />
+                  <Icon name="log-out" className="size-4 text-muted" strokeWidth={1.9} />
                 </DockIcon>
               </View>
             ) : authStatus === "anonymous" ? (
@@ -892,7 +1007,7 @@ function DockBody({
             <DockIcon label={themeLabel} onClick={toggle}>
               <Icon
                 name={resolved === "dark" ? "sun" : "moon"}
-                className="size-4"
+                className="size-4 text-muted"
                 strokeWidth={1.9}
               />
             </DockIcon>
@@ -903,12 +1018,18 @@ function DockBody({
   );
 }
 
-/**
- * The drawer the web mounted inside a <dialog> with an AnimatePresence slide:
- * same spring (stiffness 420, damping 40), same backdrop, kept mounted so the
- * exit runs — `mobileNavOpen` flips the shared value; a closed drawer is
- * invisible and untouchable, exactly like the web after its 260 ms DRAWER_MS.
- */
+// Native UI-thread transitions: no JS animation loop and no render-time
+// construction. Reanimated retains the native views for the closing motion.
+const DRAWER_SLIDE_IN = SlideInLeft.duration(200)
+  .easing(Easing.out(Easing.cubic))
+  .reduceMotion(ReduceMotion.System);
+const DRAWER_SLIDE_OUT = SlideOutLeft.duration(160)
+  .easing(Easing.in(Easing.cubic))
+  .reduceMotion(ReduceMotion.System);
+const DRAWER_FADE_IN = FadeIn.duration(120).reduceMotion(ReduceMotion.System);
+const DRAWER_FADE_OUT = FadeOut.duration(160).reduceMotion(ReduceMotion.System);
+
+/** Only the open drawer subscribes to its controls; the catalogue stays idle. */
 export function SideBar({
   onBrowse,
   onRegions,
@@ -918,39 +1039,30 @@ export function SideBar({
   onRegions?: () => void;
   onLibraryList?: () => void;
 }) {
-  const { mobileNavOpen, setMobileNavOpen } = useMusicPlayer();
+  const { setMobileNavOpen } = useMusicPlayer();
+  const mobileNavOpen = useMobileNavOpen();
   const insets = useSafeAreaInsets();
 
-  /* The web's M-key dock toggle is dropped (no keyboard); setSidebarWide
-   * survives through the header control. matchMedia resize-close: the drawer
-   * only exists here, so it never needs closing on a desktop resize. */
+  const { width } = useWindowDimensions();
+  const panelWidth = Math.min(312, width * 0.86);
+  const dockColor = useCSSVariable("--color-dock");
+  usePanelBackHandler(mobileNavOpen, () => setMobileNavOpen(false));
 
-  const progress = useSharedValue(0);
-  useEffect(() => {
-    // Same transition the web handed framer-motion.
-    progress.value = withSpring(mobileNavOpen ? 1 : 0, { stiffness: 420, damping: 40 });
-  }, [mobileNavOpen, progress]);
-
-  const panelWidth = useMemo(() => {
-    const screen = Dimensions.get("window").width;
-    return Math.min(19.5 * 16, screen * 0.86); // w-[min(19.5rem,86vw)]
-  }, []);
-
-  const backdropStyle = useAnimatedStyle(() => ({
-    opacity: progress.value,
-  }));
-  const panelStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: (progress.value - 1) * panelWidth }],
-  }));
+  if (!mobileNavOpen) return null;
 
   return (
-    <View
-      pointerEvents={mobileNavOpen ? "auto" : "none"}
+    <Animated.View
+      pointerEvents="auto"
+      entering={DRAWER_FADE_IN}
+      exiting={DRAWER_FADE_OUT}
       accessibilityViewIsModal={mobileNavOpen}
-      className="fixed inset-0 z-50"
+      style={[StyleSheet.absoluteFill, { zIndex: 70 }]}
     >
       {/* Backdrop — backdrop:bg-black/60 */}
-      <Animated.View className="absolute inset-0 bg-black/60" style={backdropStyle} />
+      <View
+        pointerEvents="none"
+        style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.48)" }]}
+      />
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Close the dock"
@@ -959,8 +1071,23 @@ export function SideBar({
       />
       <Animated.View
         accessibilityLabel="ZYRAVA dock"
+        entering={DRAWER_SLIDE_IN}
+        exiting={DRAWER_SLIDE_OUT}
         className="absolute inset-y-0 left-0 flex-col border-r border-dock-line bg-dock shadow-pop"
-        style={[{ width: panelWidth }, panelStyle]}
+        style={[
+          {
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: panelWidth,
+            backgroundColor: typeof dockColor === "string" ? dockColor : "#101010",
+            borderTopRightRadius: 24,
+            borderBottomRightRadius: 24,
+            overflow: "hidden",
+            elevation: 16,
+          },
+        ]}
       >
         <View
           className="min-h-0 flex-1 flex-col"
@@ -975,8 +1102,13 @@ export function SideBar({
           />
         </View>
       </Animated.View>
-    </View>
+    </Animated.View>
   );
+}
+
+function ListeningStat() {
+  const { listenedSeconds } = usePlaybackProgress();
+  return <Stat label="Listening" value={formatRuntime(listenedSeconds)} />;
 }
 
 /** One cell of the session grid — label, figure, optional footnote. */
@@ -1051,11 +1183,13 @@ function Fader({
 /** Compact pill for the space picker. */
 function Chip({
   active,
+  disabled = false,
   onPress,
   label,
   children,
 }: {
   active: boolean;
+  disabled?: boolean;
   onPress: () => void;
   label?: string;
   children: React.ReactNode;
@@ -1064,7 +1198,8 @@ function Chip({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ selected: active }}
+      accessibilityState={{ selected: active, disabled }}
+      disabled={disabled}
       onPress={onPress}
       className={cn(
         "min-h-7 rounded-full px-2.5 items-center justify-center",

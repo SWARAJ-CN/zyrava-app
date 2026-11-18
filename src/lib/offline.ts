@@ -16,7 +16,7 @@
  * one-transaction guarantee the IndexedDB version gave.
  */
 
-import * as Crypto from "expo-crypto";
+import SHA256 from "crypto-js/sha256";
 import { Directory, File, Paths } from "expo-file-system";
 import type { DocumentPickerAsset, DocumentPickerResult } from "expo-document-picker";
 import { getAudioEngine } from "./audio-engine";
@@ -194,7 +194,10 @@ export async function deleteTrack(id: string): Promise<void> {
       /* already gone — the row removal below still cleans the list */
     }
   }
-  writeJson(TRACKS_KEY, readRows().filter((track) => track.id !== id));
+  writeJson(
+    TRACKS_KEY,
+    readRows().filter((track) => track.id !== id)
+  );
 }
 
 /**
@@ -228,11 +231,7 @@ export async function collectPickedFiles(
   result: DocumentPickerResult | DocumentPickerAsset[],
   limit: number
 ): Promise<DocumentPickerAsset[]> {
-  const assets = Array.isArray(result)
-    ? result
-    : result.canceled
-      ? []
-      : (result.assets ?? []);
+  const assets = Array.isArray(result) ? result : result.canceled ? [] : (result.assets ?? []);
   return assets
     .filter((asset) => typeof asset.name === "string" && isAudioFileName(asset.name))
     .slice(0, limit);
@@ -268,15 +267,15 @@ export interface LocalFileSeed {
 /**
  * A fingerprint that identifies the same file across imports. The web hashed
  * `size:lastModified:name` with SHA-256 when `crypto.subtle` was reachable;
- * on device expo-crypto is always reachable, and the FNV-1a tail is kept for
- * the one case the web fell back on — a hash that will not run at all.
+ * use the same UTF-8 SHA-256 in JavaScript so existing IDs stay stable even
+ * in binaries without ExpoCrypto. This hashes metadata, not audio bytes.
  */
 export async function localIdFor(file: LocalFileSeed): Promise<string> {
   const seed = `${file.size ?? 0}:${file.lastModified ?? 0}:${file.name}`;
   try {
-    const hex = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, seed);
+    const hex = SHA256(seed).toString();
     if (/^[0-9a-f]{64}$/.test(hex)) return `local:${hex.slice(0, 24)}`;
-    throw new Error("expo-crypto returned an unexpected digest");
+    throw new Error("SHA-256 returned an unexpected digest");
   } catch {
     let hash = 2166136261;
     for (let i = 0; i < seed.length; i += 1) {

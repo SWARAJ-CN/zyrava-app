@@ -36,7 +36,7 @@ const FOLLOW = 0.012;
 const DRIFT = 360 / 40_000;
 
 function hsl(h: number, s: number, l: number): string {
-  'worklet';
+  "worklet";
   const c = (1 - Math.abs((2 * l) / 100 - 1)) * (s / 100);
   const x = c * (1 - Math.abs((((((h % 360) + 360) % 360) / 60) % 2) - 1));
   const m = l / 100 - c / 2;
@@ -92,12 +92,13 @@ export function BeatWordmark({
   const hue = useSharedValue(hueSeed);
 
   useEffect(() => {
-    if (reduced) {
+    if (reduced || !playing) {
       fill.value = 0;
       return;
     }
 
     let frame = 0;
+    let lastFrame = 0;
     let level = 0;
     let reference = -1;
     let bins = new Uint8Array(0);
@@ -113,6 +114,8 @@ export function BeatWordmark({
 
     const tick = (time: number) => {
       frame = requestAnimationFrame(tick);
+      if (time - lastFrame < 1000 / 24) return;
+      lastFrame = time;
       const analyser = getAnalyser();
       const bass = analyser && playing ? readBass(analyser) : 0;
       if (reference < 0) reference = bass;

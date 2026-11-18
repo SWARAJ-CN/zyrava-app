@@ -1,17 +1,18 @@
+import { CustomizationProvider } from "@/components/providers/CustomizationProvider";
 import "react-native-reanimated";
 import type { JSX } from "react";
 import { useEffect, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { useFonts, Inter_100Thin, Inter_200ExtraLight, Inter_300Light, Inter_400Regular, Inter_500Medium, Inter_600SemiBold, Inter_700Bold, Inter_800ExtraBold, Inter_900Black } from "@expo-google-fonts/inter";
+import { useFonts } from "@expo-google-fonts/inter";
 import * as SplashScreen from "expo-splash-screen";
 import { Uniwind } from "uniwind";
-import { HeroUINativeProvider } from "heroui-native";
+import { HeroUINativeProvider, useThemeColor } from "heroui-native";
 import { Stack } from "expo-router";
 import { Appearance } from "react-native";
 
-import { applyGlobalFont } from "@/lib/global-font";
+import { INTER_FONTS } from "@/lib/global-font";
 import "../global.css";
 import { hydrateStorage, getItem } from "@/lib/store";
 import { readRequestLocale } from "@/lib/i18n/server";
@@ -30,10 +31,19 @@ import { MusicPlayerProvider } from "@/components/providers/MusicPlayerProvider"
 import { LibraryProvider } from "@/components/providers/LibraryProvider";
 import { PlaybackSessionGuard } from "@/components/providers/PlaybackSessionGuard";
 import { AuthGate } from "@/components/auth/AuthGate";
+import { AuthLoadingScreen } from "@/components/auth/AuthLoadingScreen";
 
-/* Hold the native splash until storage is hydrated and Inter is live — the
-   mobile mirror of the web's pre-paint theme script + font pipeline. */
-void SplashScreen.preventAutoHideAsync();
+export { AppErrorScreen as ErrorBoundary } from "@/components/AppErrorScreen";
+
+/* Hold the native splash only until the branded React loading screen lays out. */
+void SplashScreen.preventAutoHideAsync().catch(() => undefined);
+
+// Match the PWA's dark first paint while persisted preferences are loading.
+Uniwind.setTheme("dark");
+
+function hideNativeSplash() {
+  void SplashScreen.hideAsync().catch(() => undefined);
+}
 
 /** Resolve `music-theme` ("light"|"dark"|"system") before first paint. */
 function prePaintTheme(): void {
@@ -48,46 +58,56 @@ function ThemedStatusBar(): JSX.Element {
   return <StatusBar style={resolved === "light" ? "dark" : "light"} />;
 }
 
+function RootNavigator() {
+  const backgroundColor = useThemeColor("background");
+  return (
+    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor } }}>
+      <Stack.Screen name="(auth)" />
+      <Stack.Screen name="(app)" />
+    </Stack>
+  );
+}
+
 export default function RootLayout(): JSX.Element | null {
-  const [fontsLoaded] = useFonts({
-    Inter_100Thin,
-    Inter_200ExtraLight,
-    Inter_300Light,
-    Inter_400Regular,
-    Inter_500Medium,
-    Inter_600SemiBold,
-    Inter_700Bold,
-    Inter_800ExtraBold,
-    Inter_900Black,
-  });
+  const [fontsLoaded, fontError] = useFonts(INTER_FONTS);
   const [ready, setReady] = useState(false);
+  const [fontsTimedOut, setFontsTimedOut] = useState(false);
 
   useEffect(() => {
+    if (fontsLoaded || fontError) return;
+    const timer = setTimeout(() => setFontsTimedOut(true), 8000);
+    return () => clearTimeout(timer);
+  }, [fontsLoaded, fontError]);
+
+  useEffect(() => {
+    let alive = true;
     // Boot must never hang on storage: worst case, the app runs from the
     // empty in-memory cache and persistence simply no-ops.
     void hydrateStorage()
       .then(() => {
+        if (!alive) return;
         prePaintTheme();
-        // Inter becomes the app's typeface the moment fonts are in memory,
-        // before the first Text renders — the web's global font-family.
-        // Belt-and-braces: typography must never be able to block boot.
-        try {
-          applyGlobalFont();
-        } catch {
-          /* system font fallback */
-        }
         setReady(true);
       })
       .catch(() => {
-        setReady(true);
+        if (alive) setReady(true);
       });
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  useEffect(() => {
-    if (fontsLoaded && ready) void SplashScreen.hideAsync();
-  }, [fontsLoaded, ready]);
-
-  if (!fontsLoaded || !ready) return null;
+  // Paint the branded PWA loader immediately. Font errors must not strand the
+  // app on a native splash forever; the OS font is a usable fallback.
+  if ((!fontsLoaded && !fontError && !fontsTimedOut) || !ready) {
+    return (
+      <GestureHandlerRootView style={{ flex: 1 }} onLayout={hideNativeSplash}>
+        <SafeAreaProvider>
+          <AuthLoadingScreen allowWake={false} />
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    );
+  }
 
   /* The provider tree mirrors the web `app/layout.tsx` order exactly:
      I18n > Pwa > VisitBeacon/IdleNotifier > Theme > Auth > GuestLock > Toast
@@ -95,7 +115,7 @@ export default function RootLayout(): JSX.Element | null {
   const initialLocale = readRequestLocale();
 
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
+    <GestureHandlerRootView style={{ flex: 1 }} onLayout={hideNativeSplash}>
       <SafeAreaProvider>
         <HeroUINativeProvider
           config={{
@@ -111,32 +131,31 @@ export default function RootLayout(): JSX.Element | null {
               <IdleNotifier />
               <ThemeProvider>
                 <AuthProvider>
-                  <GuestLockProvider>
-                    <ToastProvider>
-                      <CommunityProvider>
-                        <TasteProvider>
-                          <OfflineProvider>
-                            <MusicPlayerProvider>
-                              <LibraryProvider>
-                                <PlaybackSessionGuard />
-                                {/* AppChrome lives in (app)/_layout, so the shell
+                  <CustomizationProvider>
+                    <GuestLockProvider>
+                      <ToastProvider>
+                        <CommunityProvider>
+                          <TasteProvider>
+                            <OfflineProvider>
+                              <MusicPlayerProvider>
+                                <LibraryProvider>
+                                  <PlaybackSessionGuard />
+                                  {/* AppChrome lives in (app)/_layout, so the shell
                                     paints over every music screen without a second
                                     copy on the account routes — the web's root-level
                                     mount, expressed through the route groups. */}
-                                <AuthGate>
-                                  <Stack screenOptions={{ headerShown: false }}>
-                                    <Stack.Screen name="(auth)" />
-                                    <Stack.Screen name="(app)" />
-                                  </Stack>
-                                </AuthGate>
-                                <ThemedStatusBar />
-                              </LibraryProvider>
-                            </MusicPlayerProvider>
-                          </OfflineProvider>
-                        </TasteProvider>
-                      </CommunityProvider>
-                    </ToastProvider>
-                  </GuestLockProvider>
+                                  <AuthGate>
+                                    <RootNavigator />
+                                  </AuthGate>
+                                  <ThemedStatusBar />
+                                </LibraryProvider>
+                              </MusicPlayerProvider>
+                            </OfflineProvider>
+                          </TasteProvider>
+                        </CommunityProvider>
+                      </ToastProvider>
+                    </GuestLockProvider>
+                  </CustomizationProvider>
                 </AuthProvider>
               </ThemeProvider>
             </PwaProvider>

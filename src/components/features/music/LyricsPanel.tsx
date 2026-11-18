@@ -1,24 +1,25 @@
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AccessibilityInfo, Pressable, Text, View } from "react-native";
 import { ScrollView, type ScrollViewInstance } from "react-native";
 import { Icon } from "@/components/ui/icons";
-import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
 import {
-  activeLineIndex,
-  formatSeconds,
-  type LyricLine,
-  type LyricsBody,
-  type LyricsResult,
-} from "@/lib/lyrics";
-import { lookupLyrics } from "@/lib/lrclib";
+  useMusicPlayer,
+  usePlaybackProgress,
+  useKaraokePreparationProgress,
+} from "@/components/providers/MusicPlayerProvider";
+import { activeLineIndex, formatSeconds, type LyricLine, type LyricsBody } from "@/lib/lyrics";
+import { cachedLyrics, loadLyrics, invalidateLyrics, type LyricsState } from "@/lib/lyrics-cache";
 import type { Song } from "@/lib/saavn";
 import { cn } from "@/lib/cn";
+import { Modal } from "@/components/ui/Modal";
+import { LyricLineMotion } from "./LyricLineMotion";
+import { LYRIC_LANGUAGES, type LyricLanguage } from "@/lib/lyric-translation";
+import { useLyricTranslation } from "@/hooks/useLyricTranslation";
 
 /* ------------------------------------------------------------------ *
- * The lrclib lookup runs DIRECT here: the web asked its own
- * /api/music/lyrics route (which wrapped lrclib + the LRC parser); the ported
- * @/lib/lrclib already does that work on-device, so the seed is built exactly
- * like the route built it — title/artist/album + duration ROUNDED — and its
+ * The lrclib adapter uses the configured web /api/music/lyrics route, or does
+ * the same lookup on-device when no web origin is configured. The seed is
+ * built like the web panel's — title/artist/album + duration ROUNDED — and its
  * LyricsOutcome maps onto the same four states the panel knew. The 24 h module
  * cache, the single-flight map and the "errors stay uncached" rule are
  * verbatim.
@@ -32,11 +33,8 @@ function monotonic(): number {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
-/** A track's lyrics run for a day — the provider's answer rarely changes. */
-const TTL = 24 * 60 * 60 * 1000;
-
 /** How long a hand on the wheel or the screen suspends the auto-scroll. */
-const HOLD_MS = 5000;
+const HOLD_MS = 3000;
 
 /**
  * How far past the last `progress` reading the clock may reach on its own.
@@ -44,14 +42,6 @@ const HOLD_MS = 5000;
  * instead of running ahead for as long as it is silent.
  */
 const REACH_MS = 700;
-
-/** The longest glide to a new line. Short hops between neighbours finish sooner. */
-const GLIDE_MS = 720;
-
-/** easeInOutCubic: leaves gently, arrives gently, so lines never snap. */
-function eased(k: number): number {
-  return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
-}
 
 /** Read per move, not once at mount — the setting can change while we sit here. */
 function readsSteady(): boolean {
@@ -75,54 +65,6 @@ function spotlight(index: number, active: number): number {
   return Math.max(0.34, 0.8 - (away - 1) * 0.1);
 }
 
-type LyricsState =
-  | { kind: "ready"; result: LyricsResult }
-  | { kind: "none" }
-  | { kind: "instrumental" }
-  /** A failed request, never cached: the Retry button is the recovery. */
-  | { kind: "error" };
-
-const store = new Map<string, { at: number; state: LyricsState }>();
-
-function cachedState(id: string): LyricsState | undefined {
-  const entry = store.get(id);
-  return entry && Date.now() - entry.at < TTL ? entry.state : undefined;
-}
-
-/** Live request for one song id — a reopen during the fetch reuses it. */
-const inflight = new Map<string, Promise<LyricsState>>();
-
-/**
- * One lyrics lookup. A thrown failure (rate limit, outage) is never "this
- * song has no words", so the two states stay distinguishable — exactly what
- * the route handler signalled with its status codes.
- */
-async function fetchLyrics(song: Song): Promise<LyricsState> {
-  try {
-    const outcome = await lookupLyrics({
-      title: song.title,
-      artist: song.artist,
-      album: song.album,
-      duration: Math.round(song.duration || 0),
-    });
-    if (outcome.status === "none") {
-      return outcome.reason === "instrumental" ? { kind: "instrumental" } : { kind: "none" };
-    }
-    const result = outcome.result;
-    if (result.body.kind === "timed" && result.body.lines.length >= 2) {
-      return { kind: "ready", result };
-    }
-    if (result.body.kind === "plain" && result.body.stanzas.length) {
-      return { kind: "ready", result };
-    }
-    return { kind: "none" };
-  } catch {
-    // A LyricsUpstreamError is an outage; anything else failed to answer.
-    // Both read the same here: "not found" must not be cached for an error.
-    return { kind: "error" };
-  }
-}
-
 /* ------------------------------------------------------------------ *
  * The clock.
  * ------------------------------------------------------------------ */
@@ -140,7 +82,8 @@ async function fetchLyrics(song: Song): Promise<LyricsState> {
  * Nothing here changes the audio. `progress` is only read.
  */
 function useLyricClock(id: string, lines: LyricLine[] | null): number {
-  const { progress, playing, rate } = useMusicPlayer();
+  const { playing, rate } = useMusicPlayer();
+  const { progress } = usePlaybackProgress();
 
   const [shown, setShown] = useState<{ id: string; index: number } | null>(null);
   const anchor = useRef({ time: progress, wall: monotonic() });
@@ -149,10 +92,10 @@ function useLyricClock(id: string, lines: LyricLine[] | null): number {
   /* Every fresh reading re-bases the clock on the player's own number. */
   useEffect(() => {
     anchor.current = { time: progress, wall: monotonic() };
-  }, [progress]);
+  }, [progress, playing, rate, id]);
 
   useEffect(() => {
-    if (!lines?.length) return;
+    if (!lines?.length || !playing) return;
     last.current = -2;
 
     let handle = requestAnimationFrame(function step(now) {
@@ -169,6 +112,7 @@ function useLyricClock(id: string, lines: LyricLine[] | null): number {
 
   // The cache answers for the current song; a landing from another seed is
   // ignored, and a frame of the derived value is invisible.
+  if (!playing) return lines ? activeLineIndex(lines, progress) : -1;
   return shown?.id === id ? shown.index : lines ? activeLineIndex(lines, progress) : -1;
 }
 
@@ -198,8 +142,12 @@ const LyricsRows = memo(function LyricsRows({
   body,
   active,
   onSeek,
+  translations,
+  large = false,
 }: {
   body: LyricsBody;
+  large?: boolean;
+  translations?: string[];
   active: number;
   onSeek: (time: number) => void;
 }) {
@@ -211,11 +159,14 @@ const LyricsRows = memo(function LyricsRows({
   const instantRef = useRef(true);
   const holdUntilRef = useRef(0);
   const [held, setHeld] = useState(false);
+  const activeRef = useRef(active);
+  useLayoutEffect(() => {
+    activeRef.current = active;
+  }, [active]);
 
   /* Where the list actually sits, fractional — RN's scrollTo answers
    * fractions, so no remainder transform is needed. */
   const atRef = useRef(0);
-  const frameRef = useRef(0);
 
   const timed = body.kind === "timed";
   const lines = timed ? body.lines : [];
@@ -233,41 +184,21 @@ const LyricsRows = memo(function LyricsRows({
     return Math.min(Math.max(target, 0), room);
   }, []);
 
-  const paint = useCallback((value: number) => {
-    atRef.current = value;
-    boxRef.current?.scrollTo({ x: 0, y: value, animated: false });
-  }, []);
-
   const move = useCallback(
     (index: number) => {
       if (index < 0 || Date.now() < holdUntilRef.current) return;
       const to = centre(index);
       if (to === null) return;
-
-      const from = atRef.current;
-      const distance = Math.abs(to - from);
-      const settle = instantRef.current || readsSteady() || distance < 3;
+      const animated = !instantRef.current && !readsSteady() && Math.abs(to - atRef.current) >= 3;
       instantRef.current = false;
-      if (settle) {
-        paint(to);
-        return;
-      }
-
-      if (frameRef.current) cancelAnimationFrame(frameRef.current);
-      const started = monotonic();
-      const ms = Math.min(GLIDE_MS, 240 + distance * 1.5);
-      const step = (now: number) => {
-        const k = Math.min(1, (now - started) / ms);
-        paint(from + (to - from) * eased(k));
-        frameRef.current = k < 1 ? requestAnimationFrame(step) : 0;
-      };
-      frameRef.current = requestAnimationFrame(step);
+      // The native scroll view owns the glide: no per-frame JS scroll commands.
+      boxRef.current?.scrollTo({ x: 0, y: to, animated });
     },
-    [centre, paint]
+    [centre]
   );
 
   /* A new set of words is a new list: start at the top and land, don't travel. */
-  useEffect(() => {
+  useLayoutEffect(() => {
     atRef.current = 0;
     instantRef.current = true;
     rectsRef.current = [];
@@ -275,8 +206,8 @@ const LyricsRows = memo(function LyricsRows({
   }, [body]);
 
   useEffect(() => {
-    if (timed) move(active);
-  }, [active, timed, move]);
+    if (timed && !held) move(active);
+  }, [active, timed, held, move]);
 
   useEffect(() => {
     // Track the live reduce-motion answer (readsSteady's native twin).
@@ -293,33 +224,42 @@ const LyricsRows = memo(function LyricsRows({
     };
   }, []);
 
-  useEffect(
-    () => () => {
-      if (frameRef.current) cancelAnimationFrame(frameRef.current);
-      frameRef.current = 0;
-    },
-    []
-  );
-
-  /* Manual reading wins for a while. The wheel/keydown listeners of the web
-   * collapse into touch: dragging the list (onScrollBeginDrag) or tapping a
-   * line's container suspends the auto-scroll for HOLD_MS. */
-  const hold = useCallback(() => {
-    holdUntilRef.current = Date.now() + HOLD_MS;
-    setHeld(true);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gestures = useRef({ touch: false, drag: false, momentum: false });
+  const clearHoldTimer = useCallback(() => {
+    if (holdTimerRef.current !== null) clearTimeout(holdTimerRef.current);
+    holdTimerRef.current = null;
   }, []);
-
-  const holdTimerRef = useRef(0);
-  const armHold = useCallback(() => {
-    hold();
-    clearTimeout(holdTimerRef.current);
-    holdTimerRef.current = setTimeout(() => {
-      setHeld(false);
-      holdUntilRef.current = 0;
-    }, HOLD_MS) as unknown as number;
-  }, [hold]);
-
-  useEffect(() => () => clearTimeout(holdTimerRef.current), []);
+  const resume = useCallback(() => {
+    clearHoldTimer();
+    gestures.current = { touch: false, drag: false, momentum: false };
+    holdUntilRef.current = 0;
+    setHeld(false);
+    // Read the current line at timeout time, including during long lyric lines.
+    move(activeRef.current);
+  }, [clearHoldTimer, move]);
+  const beginReading = useCallback(
+    (kind: "touch" | "drag" | "momentum") => {
+      gestures.current[kind] = true;
+      clearHoldTimer();
+      holdUntilRef.current = Infinity;
+      setHeld(true);
+      if (kind === "touch") boxRef.current?.scrollTo({ x: 0, y: atRef.current, animated: false });
+    },
+    [clearHoldTimer]
+  );
+  const finishReading = useCallback(
+    (kind: "touch" | "drag" | "momentum") => {
+      if (!gestures.current[kind]) return;
+      gestures.current[kind] = false;
+      if (Object.values(gestures.current).some(Boolean)) return;
+      clearHoldTimer();
+      holdUntilRef.current = Date.now() + HOLD_MS;
+      holdTimerRef.current = setTimeout(resume, HOLD_MS);
+    },
+    [clearHoldTimer, resume]
+  );
+  useEffect(() => clearHoldTimer, [clearHoldTimer]);
 
   if (!timed) {
     return (
@@ -327,23 +267,24 @@ const LyricsRows = memo(function LyricsRows({
         className="mt-2 min-h-0 flex-1"
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled
-        contentContainerStyle={{ paddingBottom: 8, gap: 14 }}
+        contentContainerStyle={{ paddingTop: 16, paddingBottom: 24, gap: 22 }}
       >
         {body.stanzas.map((stanza, index) => (
-          <Text key={index} className="text-[13px] leading-relaxed text-muted">
-            {stanza}
-          </Text>
+          <View key={index} className="gap-1">
+            <Text className="text-xl font-semibold leading-8 text-foreground">{stanza}</Text>
+            {translations?.[index] ? (
+              <Text
+                className="text-[13px] leading-relaxed text-foreground"
+                style={{ writingDirection: "auto" }}
+              >
+                {translations[index]}
+              </Text>
+            ) : null}
+          </View>
         ))}
       </ScrollView>
     );
   }
-
-  const resume = () => {
-    holdUntilRef.current = 0;
-    setHeld(false);
-    clearTimeout(holdTimerRef.current);
-    move(active);
-  };
 
   return (
     <View className="relative mt-2 min-h-0 flex-1 flex-col">
@@ -352,15 +293,30 @@ const LyricsRows = memo(function LyricsRows({
         className="min-h-0 flex-1"
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled
-        contentContainerStyle={{ paddingBottom: 8, gap: 2 }}
-        onTouchStart={armHold}
-        onScrollBeginDrag={armHold}
+        contentContainerStyle={{ paddingBottom: 48, gap: 2 }}
+        onTouchStart={() => beginReading("touch")}
+        onTouchEnd={() => finishReading("touch")}
+        onTouchCancel={() => {
+          // A cancelled responder may never emit drag/momentum-end events.
+          gestures.current = { touch: true, drag: false, momentum: false };
+          finishReading("touch");
+        }}
+        onScrollBeginDrag={() => beginReading("drag")}
+        onScrollEndDrag={() => finishReading("drag")}
+        onMomentumScrollBegin={() => beginReading("momentum")}
+        onMomentumScrollEnd={() => finishReading("momentum")}
         onLayout={(event) => {
           viewportHeightRef.current = event.nativeEvent.layout.height;
+          move(active);
         }}
         onContentSizeChange={(_w, h) => {
           contentHeightRef.current = h;
+          move(active);
         }}
+        onScroll={(event) => {
+          atRef.current = event.nativeEvent.contentOffset.y;
+        }}
+        scrollEventThrottle={16}
         accessibilityLabel="Lyrics"
       >
         <View className="flex-col gap-0.5">
@@ -372,22 +328,38 @@ const LyricsRows = memo(function LyricsRows({
                 /* Tapping is a deliberate jump, so it overrides any hold. */
                 holdUntilRef.current = 0;
                 setHeld(false);
-                clearTimeout(holdTimerRef.current);
+                clearHoldTimer();
+                gestures.current = { touch: false, drag: false, momentum: false };
                 instantRef.current = true;
                 onSeek(line.start);
               }}
-              accessibilityLabel={formatSeconds(line.start)}
+              accessibilityLabel={`${line.text}, ${formatSeconds(line.start)}`}
+              accessibilityState={{ selected: index === active }}
               onLayout={(event) => {
                 const { y, height } = event.nativeEvent.layout;
                 rectsRef.current[index] = { y, height };
+                if (index === active) move(active);
               }}
-              style={{ opacity: spotlight(index, active) }}
-              className={cn(
-                "block w-full rounded-md px-1.5 py-1 text-left",
-                index === active ? "font-semibold text-foreground" : "text-muted"
-              )}
+              className={cn("w-full py-3 pr-2", index === active ? "opacity-100" : "opacity-90")}
             >
-              <Text className="text-[13px] leading-relaxed">{line.text}</Text>
+              <LyricLineMotion opacity={spotlight(index, active)} active={index === active}>
+                <Text
+                  className={cn(
+                    large ? "text-[30px] leading-[42px]" : "text-[22px] leading-8",
+                    index === active ? "font-bold text-foreground" : "font-semibold text-muted"
+                  )}
+                >
+                  {line.text}
+                </Text>
+                {translations?.[index] ? (
+                  <Text
+                    className="mt-1 text-[13px] leading-relaxed text-foreground"
+                    style={{ writingDirection: "auto" }}
+                  >
+                    {translations[index]}
+                  </Text>
+                ) : null}
+              </LyricLineMotion>
             </Pressable>
           ))}
         </View>
@@ -415,33 +387,46 @@ const LyricsRows = memo(function LyricsRows({
  * through /api/music/lyrics), already parsed into timestamps, and the line
  * being sung is read off the player's own position — so the highlight can
  * never disagree with the audio, and a tap on any line seeks to it through the
- * same `seek` the progress bar uses. Between lines the list glides on frames
- * instead of jumping on state ticks.
+ * same `seek` the progress bar uses. Between lines the native scroll view glides
+ * while the UI thread animates each line’s emphasis.
  */
-export function LyricsPanel({ song }: { song: Song }) {
-  const { duration, seek } = useMusicPlayer();
+export function LyricsPanel({ song, large = false }: { song: Song; large?: boolean }) {
+  const {
+    seek,
+    karaokeOn,
+    karaokeAvailable,
+    karaokePreparing,
+    karaokeError,
+    setKaraoke,
+    karaokeSelecting,
+    instrumentalName,
+    instrumentalPlaying,
+    chooseInstrumental,
+  } = useMusicPlayer();
+  const { duration } = usePlaybackProgress();
+  const karaokeProgress = useKaraokePreparationProgress();
+  const karaokePercent = karaokeProgress?.percent ?? 0;
+  const karaokeStage = {
+    starting: "Starting",
+    downloading: "Downloading audio",
+    reading: "Loading audio",
+    decoding: "Decoding audio",
+    processing: "Reducing vocals",
+    saving: "Saving audio",
+    ready: "Ready",
+  }[karaokeProgress?.stage ?? "starting"];
 
   /* The cache answers while a result is fresh; state only carries what an
    * in-flight request lands with, so switching seeds needs no reset pass. */
   const [settled, setSettled] = useState<{ id: string; state: LyricsState } | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const state = settled?.id === song.id ? settled.state : cachedState(song.id);
+  const state = settled?.id === song.id ? settled.state : cachedLyrics(song.id);
   const loading = !state;
 
   useEffect(() => {
     if (state) return;
 
-    let running = inflight.get(song.id);
-    if (!running) {
-      running = fetchLyrics(song).then((next) => {
-        // An outage stays uncached, so the next look asks again.
-        if (next.kind !== "error") store.set(song.id, { at: Date.now(), state: next });
-        return next;
-      });
-      inflight.set(song.id, running);
-      // The cleanup chain must not become a second, unhandled rejection.
-      void running.catch(() => undefined).finally(() => inflight.delete(song.id));
-    }
+    const running = loadLyrics(song);
 
     let alive = true;
     running
@@ -460,6 +445,10 @@ export function LyricsPanel({ song }: { song: Song }) {
   const body = result?.body ?? null;
   const lines = body?.kind === "timed" ? body.lines : null;
   const active = useLyricClock(song.id, lines);
+  const [language, setLanguage] = useState<LyricLanguage | null>(null);
+  const [languagesOpen, setLanguagesOpen] = useState(false);
+  const translation = useLyricTranslation(body, language, song.language);
+  const languageName = LYRIC_LANGUAGES.find(([code]) => code === language)?.[1];
 
   const onSeek = useCallback(
     (time: number) => {
@@ -470,7 +459,7 @@ export function LyricsPanel({ song }: { song: Song }) {
   );
 
   const retry = () => {
-    store.delete(song.id);
+    invalidateLyrics(song.id);
     setSettled(null);
     setAttempt((value) => value + 1);
   };
@@ -492,27 +481,176 @@ export function LyricsPanel({ song }: { song: Song }) {
   const failed = state?.kind === "none" || state?.kind === "error";
 
   return (
-    <View className="mt-5 min-h-0 flex-1 flex-col">
-      <View className="flex-row flex-none items-center gap-2">
-        <View className="min-w-0">
+    <View className="mt-3 min-h-0 flex-1 flex-col">
+      <View style={{ flexShrink: 0, gap: 6 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
           <Text className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
-            Lyrics
+            {body?.kind === "timed" ? "Synced" : "Lyrics"}
           </Text>
-          <Text numberOfLines={1} className="truncate pt-0.5 text-[11px] text-faint-foreground">
-            {subtitle}
-          </Text>
+          <View style={{ flex: 1 }} />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Karaoke mode"
+            accessibilityHint="Reduce vocals in the current song without restarting playback."
+            accessibilityState={{
+              selected: karaokeOn,
+              disabled: !karaokeAvailable || karaokeSelecting,
+              busy: karaokeSelecting,
+            }}
+            disabled={!karaokeAvailable || karaokeSelecting}
+            onPress={() => setKaraoke(!karaokeOn)}
+            style={{
+              minHeight: 40,
+              flexShrink: 0,
+              justifyContent: "center",
+              paddingHorizontal: 12,
+            }}
+            className={cn(
+              "rounded-full active:opacity-80",
+              karaokeOn ? "bg-foreground" : "bg-surface-secondary",
+              !karaokeAvailable && "opacity-50"
+            )}
+          >
+            <Text
+              className={cn(
+                "text-xs font-semibold",
+                karaokeOn ? "text-background" : "text-foreground"
+              )}
+            >
+              {karaokeSelecting
+                ? "Choosing audio…"
+                : karaokePreparing
+                  ? `Preparing ${karaokePercent}%`
+                  : karaokeOn
+                    ? "Karaoke on"
+                    : "Karaoke"}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Translate lyrics"
+            accessibilityState={{ expanded: languagesOpen }}
+            onPress={() => setLanguagesOpen(true)}
+            style={{
+              minHeight: 40,
+              flexShrink: 0,
+              justifyContent: "center",
+              paddingHorizontal: 14,
+            }}
+            className="rounded-full bg-accent-soft active:opacity-80"
+          >
+            <Text className="text-xs font-semibold text-accent-soft-foreground">Translate</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            onPress={retry}
+            disabled={loading}
+            accessibilityLabel="Look up the lyrics again"
+            className="ml-auto size-11 flex-none items-center justify-center text-muted transition-colors active:text-foreground disabled:pointer-events-none disabled:opacity-40"
+          >
+            <Icon name="refresh" className="size-4" />
+          </Pressable>
         </View>
-        <Pressable
-          accessibilityRole="button"
-          onPress={retry}
-          disabled={loading}
-          accessibilityLabel="Look up the lyrics again"
-          className="ml-auto size-9 flex-none items-center justify-center rounded-full border border-separator text-muted transition-colors active:text-foreground disabled:pointer-events-none disabled:opacity-40"
-        >
-          <Icon name="refresh" className="size-4" />
-        </Pressable>
+        <Text numberOfLines={1} className="text-[11px] text-faint-foreground">
+          {languageName ? `${languageName} · ${subtitle}` : subtitle}
+        </Text>
       </View>
 
+      {karaokeError || !karaokeAvailable || karaokeOn ? (
+        <Text accessibilityLiveRegion="polite" className="mt-2 text-[11px] text-muted">
+          {karaokeError ??
+            (!karaokeAvailable
+              ? "Karaoke processing is unavailable on this player."
+              : karaokePreparing
+                ? `${karaokeStage} · ${karaokePercent}% overall. Original audio keeps playing. Tap Karaoke to cancel.`
+                : instrumentalPlaying
+                  ? `Playing instrumental: ${instrumentalName ?? "Selected file"}.`
+                  : "Reducing vocals in the current song. Some vocals may remain and instruments may sound quieter.")}
+        </Text>
+      ) : null}
+      {!karaokeOn && instrumentalName ? (
+        <Text className="mt-2 text-[11px] text-muted">
+          A saved instrumental is available. Karaoke uses the current song unless you choose a file.
+        </Text>
+      ) : null}
+      {instrumentalName || karaokeOn ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Choose instrumental file"
+          disabled={karaokeSelecting}
+          onPress={() => void chooseInstrumental()}
+          className="min-h-10 self-start justify-center py-2"
+        >
+          <Text className="text-xs text-foreground">Use an instrumental file</Text>
+        </Pressable>
+      ) : null}
+      {karaokePreparing ? (
+        <View
+          accessibilityRole="progressbar"
+          accessibilityLabel={`Karaoke preparation: ${karaokeStage}`}
+          accessibilityValue={{ min: 0, max: 100, now: karaokePercent }}
+          className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-secondary"
+        >
+          <View
+            className="h-full rounded-full bg-foreground"
+            style={{ width: `${karaokePercent}%` }}
+          />
+        </View>
+      ) : null}
+      {translation.status === "loading" ? (
+        <Text accessibilityLiveRegion="polite" className="mt-2 text-xs text-muted">
+          Translating to {languageName}…
+        </Text>
+      ) : translation.status === "error" ? (
+        <View className="mt-2 flex-row items-center gap-2">
+          <Text accessibilityLiveRegion="polite" className="flex-1 text-xs text-muted">
+            {translation.error || "Translation unavailable."} Original lyrics are still shown.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Retry lyric translation"
+            onPress={translation.retry}
+            className="min-h-10 justify-center px-2"
+          >
+            <Text className="text-xs font-semibold text-brand">Retry</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {languagesOpen ? (
+        <Modal
+          open
+          onClose={() => setLanguagesOpen(false)}
+          title="Translate lyrics"
+          isSwipeable={false}
+          description="Choose a language"
+          size="sm"
+        >
+          {([[null, "Original only"], ...LYRIC_LANGUAGES] as const).map(([code, label]) => (
+            <Pressable
+              key={code ?? "off"}
+              accessibilityRole="button"
+              accessibilityState={{ selected: language === code }}
+              onPress={() => {
+                setLanguage(code);
+                setLanguagesOpen(false);
+              }}
+              className={cn(
+                "min-h-11 justify-center rounded-lg px-3",
+                language === code && "bg-accent-soft"
+              )}
+            >
+              <Text
+                className={cn(
+                  "text-sm",
+                  language === code ? "font-semibold text-brand" : "text-foreground"
+                )}
+              >
+                {label}
+              </Text>
+            </Pressable>
+          ))}
+        </Modal>
+      ) : null}
       {loading ? (
         <View className="mt-3 flex-col gap-2.5">
           {[80, 60, 72, 55, 66].map((width, index) => (
@@ -524,9 +662,16 @@ export function LyricsPanel({ song }: { song: Song }) {
           ))}
         </View>
       ) : body ? (
-        <LyricsRows body={body} active={active} onSeek={onSeek} />
+        <LyricsRows
+          key={song.id}
+          body={body}
+          active={active}
+          onSeek={onSeek}
+          translations={translation.rows}
+          large={large}
+        />
       ) : (
-        <View className="mt-3 flex-col items-start gap-2 rounded-lg border border-separator bg-surface px-3 py-3">
+        <View className="min-h-0 flex-1 items-start justify-center gap-3 py-6">
           <View className="flex-row items-center gap-2">
             <Icon
               name={state?.kind === "instrumental" ? "music" : "mic"}

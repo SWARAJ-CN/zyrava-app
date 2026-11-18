@@ -3,9 +3,11 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
+  type SetStateAction,
 } from "react";
 import { Pressable, ScrollView, TextInput, Text, View } from "react-native";
 import { getItem, setItem } from "@/lib/store";
@@ -19,6 +21,7 @@ import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
 import { useTaste } from "@/components/providers/TasteProvider";
 import { useToast } from "@/components/providers/ToastProvider";
 import { cn } from "@/lib/cn";
+import { onCommunityEvent, onCommunityStatus } from "@/lib/socket";
 import {
   createServerPlaylist,
   deleteServerPlaylist,
@@ -44,6 +47,7 @@ interface LibraryState {
 }
 
 interface LibraryContextValue {
+  loading: boolean;
   liked: Song[];
   playlists: Playlist[];
   isLiked: (song: Song) => boolean;
@@ -127,7 +131,29 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   const { success, toast } = useToast();
   const { record } = useTaste();
 
-  const [state, setState] = useState<LibraryState>(EMPTY);
+  const userId = user?.id ?? null;
+  const accountRef = useRef(userId);
+  useEffect(() => {
+    accountRef.current = userId;
+  }, [userId]);
+  const [resolvedFor, setResolvedFor] = useState<string | null>(null);
+  const loading = userId !== null && resolvedFor !== userId;
+  // Storage was hydrated before providers mounted: paint this account's cache
+  // synchronously, then reconcile in the background. Keep the owner with the
+  // snapshot so switching accounts can never expose/persist the previous one.
+  const cached = useMemo(() => (userId ? readLibrary(userId) : EMPTY), [userId]);
+  const [snapshot, setSnapshot] = useState(() => ({ owner: userId, library: cached }));
+  const state = snapshot.owner === userId ? snapshot.library : cached;
+  const setState = useCallback(
+    (next: SetStateAction<LibraryState>) => {
+      setSnapshot((previous) => {
+        const base = previous.owner === userId ? previous.library : cached;
+        return { owner: userId, library: typeof next === "function" ? next(base) : next };
+      });
+    },
+    [userId, cached]
+  );
+  const mutationRevision = useRef(0);
   const [pickerSong, setPickerSong] = useState<Song | null>(null);
   const [newName, setNewName] = useState("");
   const [nameError, setNameError] = useState<string | null>(null);
@@ -141,9 +167,8 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
   // Load (and reset) per account: the account's library is the copy of record,
   // this device's storage is the cache it falls back to when the API is down.
   useEffect(() => {
-    const userId = user?.id ?? null;
+    loadedFor.current = null;
     if (!userId) {
-      loadedFor.current = null;
       const reset = requestAnimationFrame(() => {
         setState(EMPTY);
         setPickerSong(null);
@@ -152,8 +177,9 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     }
 
     let alive = true;
+    const revision = mutationRevision.current;
     void (async () => {
-      const local = readLibrary(userId);
+      const local = cached;
       let server: ServerLibrary | null = null;
       try {
         server = await fetchLibrary();
@@ -161,21 +187,19 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         server = null;
       }
       if (!alive) return;
-
-      if (!server) {
-        loadedFor.current = userId;
-        setState(local);
-        return;
-      }
+      loadedFor.current = userId;
+      setResolvedFor(userId);
+      // The cached list is already interactive. A slow response must not
+      // replace a like/unlike made while this initial fetch was in flight.
+      if (!server || revision !== mutationRevision.current) return;
 
       const remote = fromServer(server);
-      loadedFor.current = userId;
       if (hasNothing(remote) && !hasNothing(local)) {
         // A library from before this account existed here — carry it over.
         await uploadLibrary(local).catch(() => undefined);
-        if (!alive) return;
+        if (!alive || revision !== mutationRevision.current) return;
         const lifted = await fetchLibrary().catch(() => null);
-        if (!alive) return;
+        if (!alive || revision !== mutationRevision.current) return;
         setState(lifted ? fromServer(lifted) : local);
         return;
       }
@@ -186,17 +210,55 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false;
     };
-  }, [user?.id]);
+  }, [userId, cached, setState]);
 
   // Persist once the correct account's library is in memory.
   useEffect(() => {
-    if (!user || loadedFor.current !== user.id) return;
+    if (!userId || snapshot.owner !== userId) return;
     try {
-      setItem(storageKey(user.id), JSON.stringify(state));
+      setItem(storageKey(userId), JSON.stringify(snapshot.library));
     } catch {
       /* storage can be unavailable */
     }
-  }, [state, user]);
+  }, [snapshot, userId]);
+
+  // Match the web client's cross-device library sync. Also reconcile after a
+  // reconnect, since server pushes can be missed while the phone is offline.
+  useEffect(() => {
+    if (!userId) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let alive = true;
+    let revision = 0;
+    const reload = () => {
+      clearTimeout(timer);
+      const request = ++revision;
+      timer = setTimeout(() => {
+        const mutation = mutationRevision.current;
+        void fetchLibrary()
+          .then((server) => {
+            if (
+              alive &&
+              request === revision &&
+              mutation === mutationRevision.current &&
+              loadedFor.current === userId
+            ) {
+              setState(fromServer(server));
+            }
+          })
+          .catch(() => undefined);
+      }, 400);
+    };
+    const off = onCommunityEvent("library:changed", reload);
+    const offStatus = onCommunityStatus((connected) => {
+      if (connected) reload();
+    });
+    return () => {
+      alive = false;
+      off();
+      offStatus();
+      clearTimeout(timer);
+    };
+  }, [userId, setState]);
 
   /**
    * Changes the library at once, then writes it to the account; a write that
@@ -208,9 +270,11 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
          at the API, so no write is staged and no 401 ever reaches the toast. */
       if (!user) return;
       const before = latest.current;
+      const revision = ++mutationRevision.current;
       setState((previous) => updater(previous));
       void save().catch((error: unknown) => {
-        setState(before);
+        if (accountRef.current !== user.id) return;
+        if (revision === mutationRevision.current) setState(before);
         toast({
           title: error instanceof Error ? error.message : "Could not reach your account.",
           description: "The change was not saved.",
@@ -218,18 +282,16 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
         });
       });
     },
-    [toast, user]
+    [toast, user, setState]
   );
 
-  const isLiked = useCallback(
-    (song: Song) => state.liked.some((entry) => entry.id === song.id),
-    [state.liked]
-  );
+  const likedIds = useMemo(() => new Set(state.liked.map((song) => song.id)), [state.liked]);
+  const isLiked = useCallback((song: Song) => likedIds.has(song.id), [likedIds]);
 
   const toggleLike = useCallback(
     (song: Song) => {
       if (!requireAuth("like")) return;
-      const nowLiked = !state.liked.some((entry) => entry.id === song.id);
+      const nowLiked = !likedIds.has(song.id);
       record(nowLiked ? "like" : "unlike", song);
       commit(
         (previous) => {
@@ -246,7 +308,7 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
       if (nowLiked) success("Added to Liked songs", song.title);
       else toast({ title: "Removed from Liked songs", description: song.title });
     },
-    [commit, record, requireAuth, state.liked, success, toast]
+    [commit, record, requireAuth, likedIds, success, toast]
   );
 
   const createPlaylist = useCallback(
@@ -406,23 +468,41 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
     setPickerSong(null);
   };
 
+  const value = useMemo<LibraryContextValue>(
+    () => ({
+      loading,
+      liked: state.liked,
+      playlists: state.playlists,
+      isLiked,
+      toggleLike,
+      createPlaylist,
+      addToPlaylist,
+      removeFromPlaylist,
+      deletePlaylist,
+      playLiked,
+      playPlaylist,
+      openPicker,
+      closePicker,
+    }),
+    [
+      loading,
+      state.liked,
+      state.playlists,
+      isLiked,
+      toggleLike,
+      createPlaylist,
+      addToPlaylist,
+      removeFromPlaylist,
+      deletePlaylist,
+      playLiked,
+      playPlaylist,
+      openPicker,
+      closePicker,
+    ]
+  );
+
   return (
-    <LibraryContext.Provider
-      value={{
-        liked: state.liked,
-        playlists: state.playlists,
-        isLiked,
-        toggleLike,
-        createPlaylist,
-        addToPlaylist,
-        removeFromPlaylist,
-        deletePlaylist,
-        playLiked,
-        playPlaylist,
-        openPicker,
-        closePicker,
-      }}
-    >
+    <LibraryContext.Provider value={value}>
       {children}
 
       {pickerSong ? (
@@ -455,7 +535,10 @@ export function LibraryProvider({ children }: { children: ReactNode }) {
                     <Icon name="list" className="size-4 shrink-0 text-muted" />
                     <Text
                       numberOfLines={1}
-                      className={cn("min-w-0 flex-1 text-xs", has ? "text-faint-foreground" : "text-foreground")}
+                      className={cn(
+                        "min-w-0 flex-1 text-xs",
+                        has ? "text-faint-foreground" : "text-foreground"
+                      )}
                     >
                       {playlist.name}
                     </Text>

@@ -1,16 +1,22 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  ActivityIndicator,
   FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
   type NativeScrollEvent,
   type NativeSyntheticEvent,
-  type TextInputInstance,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useThemeColor } from "heroui-native";
+import { usePanelBackHandler } from "@/hooks/usePanelBackHandler";
 import { cn } from "@/lib/cn";
 import { formatDate } from "@/lib/format";
 import { Icon } from "@/components/ui/icons";
@@ -19,120 +25,172 @@ import { useAuth } from "@/components/providers/AuthProvider";
 import { useCommunity } from "@/components/providers/CommunityProvider";
 import { MAX_CHAT_MESSAGE, type ChatPerson, type MessageItem } from "@/lib/community";
 
-/* ------------------------------------------------------------------ *
- * Native port of the web Community ChatPanel.
- *
- * Every rail, row, copy string, timer-free behaviour and business rule is
- * preserved; the room is text-only on purpose, exactly like the web. Platform
- * substitutions only:
- *  • The panel is a full-screen surface (`fixed inset-0` → `absolute inset-0`).
- *    Escape-close and the body-scroll-lock are dropped — there are no keyboard
- *    listeners on native; closing goes through `onClose` (the (app)/chat route
- *    modal) falling back to the provider's `closeChat`, which also hides the
- *    overlay mount in AppChrome.
- *  • The thread scroll area becomes an inverted FlatList: offset 0 sits at the
- *    newest bubble, so the web's "within 160px of the bottom" pin check reads
- *    `contentOffset.y < 160` and the "scrollTop ≤ 48 → loadOlder" trigger
- *    reads as the remaining distance to the oldest end. Day separators are
- *    emitted per inverted row so they still paint above each day's bubbles.
- *  • Enter-to-send is the keyboard's Send key (`keyboardReturnKey="send"` +
- *    `onSubmitEditing`). Shift+Enter starting a line is not a thing on a
- *    native soft keyboard — the composer is multiline and keeps the hint copy.
- *  • Presence dots read from `onlineIds` (the live socket set); the text
- *    states ("Online now" / "Last seen …") keep using `person.online` like
- *    the web.
- *  • Web-only affordances dropped: hover transitions, `aria-*` state (mapped
- *    to accessibility props), the desktop empty-thread pane (`md:flex` —
- *    phones never showed it), `dock-scroll` overflow styling.
- *  • Token bridge: the web's `border-dock-line` maps to `border-separator`,
- *    `bg-dock-active` to `bg-surface-secondary` (mobile has no dock tokens).
- * ------------------------------------------------------------------ */
-
 type Rail = "threads" | "people" | "requests";
+const RAILS = [
+  { value: "threads", label: "Chats" },
+  { value: "people", label: "People" },
+  { value: "requests", label: "Requests" },
+] as const;
+const ROW = "min-h-20 flex-row items-center gap-3 py-4";
 
-const ROW = "flex-row w-full items-start gap-3 rounded-xl px-2.5 py-2.5 text-[13px]";
-
-/** The presence dot every list shares, so green means the same thing anywhere. */
-function Presence({ online, size = "md" }: { online: boolean; size?: "sm" | "md" }) {
+function Presence({ online }: { online: boolean }) {
   return (
     <View
-      pointerEvents="none"
       accessibilityElementsHidden
-      className={cn(
-        "flex-none rounded-full",
-        size === "md" ? "size-2.5" : "size-2",
-        online ? "bg-[oklch(0.78_0.16_150)]" : "bg-faint-foreground/45"
-      )}
+      className={cn("size-2 rounded-full", online ? "bg-success" : "bg-muted/50")}
     />
   );
 }
-
 function initials(name: string): string {
-  return name.trim().slice(0, 1).toUpperCase() || "?";
+  return (
+    name
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((part) => [...part][0] ?? "")
+      .join("")
+      .toUpperCase() || "?"
+  );
 }
-
 function formatTime(value: string): string {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return Number.isNaN(date.getTime())
+    ? ""
+    : date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 }
-
 function formatStamp(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  const minutes = Math.round((Date.now() - date.getTime()) / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  if (minutes < 1_440) return `${Math.round(minutes / 60)}h ago`;
-  // Intl works in Hermes (PORTING_CONVENTIONS #8); the web's
-  // toLocaleDateString(day, month short) is the app's own formatDate.
+  const minutes = Math.max(0, Math.round((Date.now() - date.getTime()) / 60_000));
+  if (minutes < 1) return "Now";
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1_440) return `${Math.round(minutes / 60)}h`;
   return formatDate(value, { day: "numeric", month: "short" });
 }
 
+export function lastActiveLabel(value: string | null, now: number): string {
+  if (!value) return "Last active unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Last active unavailable";
+  const minutes = Math.max(0, Math.floor((now - date.getTime()) / 60_000));
+  if (minutes < 1) return "Last active just now";
+  if (minutes < 60) return `Last active ${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Last active ${hours} ${hours === 1 ? "hour" : "hours"} ago`;
+  return `Last active ${formatDate(value, { day: "numeric", month: "short" })} at ${formatTime(value)}`;
+}
 function dayLabel(value: string): string {
   const date = new Date(value);
   const today = new Date();
   if (date.toDateString() === today.toDateString()) return "Today";
-  const yesterday = new Date(today.getTime() - 86_400_000);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
   if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
   return formatDate(value, { day: "numeric", month: "short", year: "numeric" });
 }
-
 function SectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <Text className="px-2.5 pb-2 text-[10px] font-semibold uppercase leading-none tracking-[0.14em] text-muted">
-      {children}
-    </Text>
-  );
+  return <Text className="pb-2 pt-4 text-sm font-semibold text-foreground">{children}</Text>;
 }
-
 function Avatar({ person, online }: { person: ChatPerson; online: boolean }) {
   return (
-    <View className="relative flex-none">
-      <View className="size-9 items-center justify-center rounded-full bg-surface-secondary">
-        <Text className="text-[13px] font-semibold text-foreground">{initials(person.name)}</Text>
+    <View className="relative shrink-0">
+      <View className="size-12 items-center justify-center rounded-full bg-accent-soft">
+        <Text className="text-base font-semibold text-accent-soft-foreground">
+          {initials(person.name)}
+        </Text>
       </View>
-      <View className="absolute -bottom-0.5 -right-0.5 rounded-full bg-background p-[2px]">
-        <Presence online={online} size="sm" />
+      <View className="absolute bottom-0 right-0 rounded-full bg-background p-1">
+        <Presence online={online} />
       </View>
     </View>
   );
 }
+function EmptyChat({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <View className="items-center gap-3 px-5 py-12">
+      <View className="mb-2 size-16 items-center justify-center rounded-full bg-accent-soft">
+        <Icon name="message" size={25} className="text-accent-soft-foreground" />
+      </View>
+      <Text className="text-center text-lg font-semibold text-foreground">{title}</Text>
+      <Text className="max-w-72 text-center text-sm leading-6 text-muted">{description}</Text>
+      {action ? <View className="mt-3">{action}</View> : null}
+    </View>
+  );
+}
 
-/** One row in the inverted thread list: a bubble or a day separator. */
 type ChatRow =
   | { key: string; kind: "day"; day: string }
   | { key: string; kind: "message"; message: MessageItem };
 
-/**
- * The community room: who asked to talk, the threads you have, and everyone
- * else on the dock. Text only by design — the app is for listening, and a plain
- * thread is the one thing nobody has to moderate.
- *
- * `onClose` dismisses the surface it was mounted in (the (app)/chat route).
- * Without it — AppChrome's overlay mount — the provider's `closeChat` is the
- * whole close, exactly like the web.
- */
+/** Inverted rows put each date above its oldest message, not between replies. */
+export function buildChatRows(messages: MessageItem[]): ChatRow[] {
+  const rows: ChatRow[] = [];
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    rows.push({ key: `message:${message.id}`, kind: "message", message });
+    const day = new Date(message.createdAt).toDateString();
+    if (index === 0 || day !== new Date(messages[index - 1].createdAt).toDateString()) {
+      rows.push({ key: `day:${day}`, kind: "day", day: dayLabel(message.createdAt) });
+    }
+  }
+  return rows;
+}
+
+const MessageBubble = memo(function MessageBubble({
+  message,
+  retry,
+}: {
+  message: MessageItem;
+  retry: (clientId: string) => void;
+}) {
+  return (
+    <View className={cn("flex-row py-1.5", message.mine ? "justify-end" : "justify-start")}>
+      <View
+        className={cn(
+          "max-w-[86%] rounded-2xl px-4 py-3",
+          message.mine ? "rounded-br-md bg-accent-soft" : "rounded-bl-md bg-surface-secondary"
+        )}
+      >
+        <Text
+          selectable
+          className={cn(
+            "text-[15px] leading-6",
+            message.mine ? "text-accent-soft-foreground" : "text-foreground"
+          )}
+        >
+          {message.text}
+        </Text>
+        <View className="mt-1.5 flex-row items-center justify-end gap-2">
+          <Text className="text-[10px] text-muted">{formatTime(message.createdAt)}</Text>
+          {message.pending ? (
+            <Text accessibilityLiveRegion="polite" className="text-[10px] text-muted">
+              Sending…
+            </Text>
+          ) : message.failed ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Retry failed message"
+              onPress={() => retry(message.clientId)}
+              className="min-h-8 justify-center px-1"
+            >
+              <Text className="text-xs font-semibold text-danger">Retry send</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+    </View>
+  );
+});
+
+/** Native inbox and conversation share one header and a keyboard-aware surface. */
 export function ChatPanel({ onClose }: { onClose?: () => void }) {
   const { user } = useAuth();
   const {
@@ -161,548 +219,627 @@ export function ChatPanel({ onClose }: { onClose?: () => void }) {
     reportTyping,
     reportTypingStop,
   } = useCommunity();
-
   const insets = useSafeAreaInsets();
-  const [rail, setRail] = useState<Rail>("threads");
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-  const [askBusy, setAskBusy] = useState<string | null>(null);
-  const listRef = useRef<FlatList<ChatRow> | null>(null);
-  const composerRef = useRef<TextInputInstance | null>(null);
-  /* Inverted list: offset 0 is the newest bubble, so "pinned to the bottom"
-     is the web's `scrollHeight - scrollTop - clientHeight < 160` check. */
-  const nearBottomRef = useRef(true);
-
-  // Escape closes; the page behind must not scroll while the room is open.
-  // On native both are the route modal's job — the keyboard listener is
-  // dropped and body-scroll-lock has no equivalent: this surface is taken
-  // over by the (app)/chat route (or AppChrome's overlay), and closing calls
-  // onClose (route dismiss) plus closeChat (provider state), see closePanel.
-
-  const unreadThreads = useMemo(
-    () => conversations.reduce((total, thread) => total + thread.unread, 0),
-    [conversations]
-  );
-
-  /* Stay pinned to the newest message unless the reader has scrolled up to
-     look at history — yanking them down mid-read is worse than a quiet update. */
+  const backgroundColor = useThemeColor("background");
+  const foregroundColor = useThemeColor("foreground");
+  const mutedColor = useThemeColor("muted");
+  const accentColor = useThemeColor("accent");
+  const [presenceTime, setPresenceTime] = useState(() => Date.now());
   useEffect(() => {
-    if (!activeId) return;
-    const list = listRef.current;
-    if (!list) return;
-    if (nearBottomRef.current) list.scrollToOffset({ offset: 0, animated: false });
-  }, [messages, activeId, typingUsers.length]);
+    if (!chatOpen) return;
+    const refresh = setTimeout(() => setPresenceTime(Date.now()), 0);
+    const tick = setInterval(() => setPresenceTime(Date.now()), 30_000);
+    return () => {
+      clearTimeout(refresh);
+      clearInterval(tick);
+    };
+  }, [chatOpen]);
+  const [rail, setRail] = useState<Rail>("threads");
+  const [chatQuery, setChatQuery] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draftKey = `${user?.id ?? ""}:${activeId ?? ""}`;
+  const draft = drafts[draftKey] ?? "";
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const actionBusy = useRef(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const listRef = useRef<FlatList<ChatRow> | null>(null);
+  const nearBottom = useRef(true);
+
+  const closePanel = useCallback(() => {
+    Keyboard.dismiss();
+    reportTypingStop();
+    onClose?.();
+    closeChat();
+  }, [reportTypingStop, onClose, closeChat]);
+  const backToInbox = useCallback(() => {
+    Keyboard.dismiss();
+    reportTypingStop();
+    selectConversation(null);
+  }, [reportTypingStop, selectConversation]);
+  usePanelBackHandler(chatOpen, activeId ? backToInbox : closePanel);
+
+  const openConversation = (id: string) => {
+    nearBottom.current = true;
+    selectConversation(id);
+  };
+  useEffect(() => {
+    if (chatOpen && activeId && nearBottom.current)
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, [messages, activeId, chatOpen]);
 
   const onThreadScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      nearBottomRef.current = contentOffset.y < 160;
-      // The inverted list's distance to its far end equals the web's scrollTop
-      // at the top of the plain scroller — the ≤ 48px older-page trigger.
-      const distanceToTop = contentSize.height - layoutMeasurement.height - contentOffset.y;
-      if (distanceToTop <= 48) loadOlder();
+      nearBottom.current = contentOffset.y < 160;
+      if (contentSize.height - layoutMeasurement.height - contentOffset.y <= 48 && !olderLoading)
+        loadOlder();
     },
-    [loadOlder]
+    [loadOlder, olderLoading]
   );
 
-  const submit = useCallback(async () => {
+  const submit = async () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || !activeId || !connected || sendingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
-    const delivered = await sendText(text);
-    setSending(false);
-    if (delivered) {
-      setDraft("");
-      reportTypingStop();
-    }
-    composerRef.current?.focus();
-  }, [draft, sending, sendText, reportTypingStop]);
-
-  const typingLabel = useMemo(() => {
-    if (!typingUsers.length) return null;
-    const names = typingUsers
-      .map((id) => (activeConversation?.user.id === id ? activeConversation.user.name : null))
-      .filter(Boolean);
-    if (!names.length) return "typing…";
-    return `${names[0]} ${names.length > 1 ? "and others are" : "is"} typing…`;
-  }, [typingUsers, activeConversation]);
-
-  /* Messages run newest → oldest for the inverted FlatList, and a separator is
-     emitted whenever the day changes along that walk — which paints each day
-     label above that day's bubbles, mirroring the web's grouping. */
-  const rows = useMemo<ChatRow[]>(() => {
-    const out: ChatRow[] = [];
-    let previousDay: string | null = null;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      out.push({ key: `m:${message.id}`, kind: "message", message });
-      const day = dayLabel(message.createdAt);
-      if (day !== previousDay) {
-        out.push({ key: `d:${day}`, kind: "day", day });
-        previousDay = day;
+    setActionError(null);
+    reportTypingStop();
+    try {
+      if (await sendText(text)) {
+        // A late response must not erase edits or a different conversation's draft.
+        setDrafts((current) =>
+          current[draftKey] === draft ? { ...current, [draftKey]: "" } : current
+        );
       }
+    } catch {
+      setActionError("Your message couldn’t be sent. Please try again.");
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
-    return out;
-  }, [messages]);
+  };
+  const runAction = async (key: string, action: () => Promise<void>) => {
+    if (actionBusy.current) return;
+    actionBusy.current = true;
+    setBusyId(key);
+    setActionError(null);
+    try {
+      await action();
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : "Please try again.");
+    } finally {
+      actionBusy.current = false;
+      setBusyId(null);
+    }
+  };
 
-  const isOnline = useCallback((id: string) => onlineIds.has(id), [onlineIds]);
+  const unread = useMemo(
+    () => conversations.reduce((total, item) => total + item.unread, 0),
+    [conversations]
+  );
+  const threads = useMemo(
+    () =>
+      conversations.filter((thread) =>
+        thread.user.name.toLocaleLowerCase().includes(chatQuery.trim().toLocaleLowerCase())
+      ),
+    [conversations, chatQuery]
+  );
+  const rows = useMemo(() => buildChatRows(messages), [messages]);
+  const isOnline = (person: ChatPerson) => connected && (onlineIds.has(person.id) || person.online);
+  const presenceLabel = (person: ChatPerson) =>
+    isOnline(person) ? "Online now" : lastActiveLabel(person.lastSeenAt, presenceTime);
+  const typing = !!activeConversation && typingUsers.includes(activeConversation.user.id);
+  const railCounts: Record<Rail, number> = {
+    threads: unread,
+    requests: requests.incoming.length,
+    people: 0,
+  };
 
   if (!chatOpen) return null;
-
-  const railCounts: Record<Rail, number> = {
-    threads: unreadThreads,
-    people: 0,
-    requests: requests.incoming.length,
-  };
-
-  const closePanel = () => {
-    // Route-dismiss first so navigation can start; closeChat always runs so
-    // the provider state (badge, activeId) resets like the web regardless of
-    // how this surface was mounted.
-    onClose?.();
-    closeChat();
-  };
-
+  const searchValue = rail === "people" ? peopleQuery : chatQuery;
+  const changeSearch = rail === "people" ? searchPeople : setChatQuery;
   return (
-    <View
+    <KeyboardAvoidingView
       accessibilityViewIsModal
       accessibilityLabel="ZYRAVA community chat"
-      className="absolute inset-0 z-50 flex-col bg-background"
-      style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={[StyleSheet.absoluteFill, { zIndex: 60, backgroundColor, paddingTop: insets.top }]}
     >
-      {/* Head */}
-      <View className="h-16 flex-none flex-row items-center gap-3 border-b border-separator px-3">
-        <View className="size-8 flex-none items-center justify-center rounded-[0.6rem] bg-accent">
-          <Icon name="message" className="size-4 text-accent-foreground" strokeWidth={2.2} />
-        </View>
-        <View className="min-w-0 flex-1">
-          <Text className="text-[12.5px] font-bold uppercase leading-none tracking-[0.22em] text-foreground" numberOfLines={1}>
-            Community
-          </Text>
-          <View className="mt-1.5 flex-row items-center gap-1.5">
-            <Presence online={connected} size="sm" />
-            <Text
-              className="text-[10px] font-medium uppercase leading-none tracking-[0.16em] text-muted"
-              numberOfLines={1}
+      <View style={{ flex: 1, paddingBottom: Math.max(insets.bottom, 8) }}>
+        <View
+          style={{
+            flexShrink: 0,
+            backgroundColor,
+            minHeight: 80,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 12,
+            paddingHorizontal: 16,
+            paddingVertical: 12,
+          }}
+        >
+          {activeId ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Back to conversations"
+              onPress={backToInbox}
+              style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}
             >
-              {connected ? "Live" : "Reconnecting"}
+              <Icon name="chevron-left" size={24} color={foregroundColor} />
+            </Pressable>
+          ) : null}
+          {activeConversation ? (
+            <Avatar person={activeConversation.user} online={isOnline(activeConversation.user)} />
+          ) : null}
+          <View style={{ minWidth: 0, flex: 1 }}>
+            <Text
+              numberOfLines={1}
+              style={{
+                color: foregroundColor,
+                fontFamily: "Inter_700Bold",
+                fontSize: activeId ? 16 : 24,
+                lineHeight: activeId ? 24 : 32,
+              }}
+              className={cn(
+                "font-bold text-foreground",
+                activeId ? "text-base" : "text-2xl tracking-tight"
+              )}
+            >
+              {activeConversation?.user.name ?? (activeId ? "Conversation" : "Community")}
+            </Text>
+            <View style={{ marginTop: 6, flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Presence
+                online={connected && (!activeConversation || isOnline(activeConversation.user))}
+              />
+              <Text
+                numberOfLines={1}
+                style={{
+                  color: typing && connected ? accentColor : mutedColor,
+                  fontSize: 12,
+                  lineHeight: 18,
+                  flexShrink: 1,
+                }}
+                className={cn("text-xs", typing && connected ? "text-accent" : "text-muted")}
+              >
+                {typing && connected
+                  ? "Typing…"
+                  : activeConversation
+                    ? presenceLabel(activeConversation.user)
+                    : connected
+                      ? "Chat with fellow listeners"
+                      : "Reconnecting…"}
+              </Text>
+            </View>
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close community"
+            onPress={closePanel}
+            style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}
+          >
+            <Icon name="x" size={22} color={foregroundColor} />
+          </Pressable>
+        </View>
+        {error || actionError ? (
+          <View className="mx-4 mb-2 rounded-xl bg-danger-soft px-4 py-3">
+            <Text
+              accessibilityRole="alert"
+              className="text-xs leading-5 text-danger-soft-foreground"
+            >
+              {actionError || error}
             </Text>
           </View>
-        </View>
-        <Button variant="ghost" size="icon" onClick={closePanel} title="Close community">
-          <Icon name="x" className="size-4" />
-        </Button>
-      </View>
+        ) : null}
 
-      {error ? (
-        <Text className="flex-none border-b border-separator bg-danger-soft/40 px-4 py-2 text-[12px] text-danger">
-          {error}
-        </Text>
-      ) : null}
-
-      {!activeId ? (
-        <View className="min-h-0 flex-1 flex-col border-r border-separator">
-          <View className="flex-none flex-row gap-1 border-b border-separator px-2.5 py-2.5">
-            {(["threads", "requests", "people"] as Rail[]).map((entry) => (
-              <Pressable
-                key={entry}
-                accessibilityRole="button"
-                accessibilityState={{ selected: rail === entry }}
-                onPress={() => setRail(entry)}
-                className={cn(
-                  "min-h-8 flex-1 items-center justify-center rounded-full px-2.5",
-                  rail === entry ? "bg-accent" : "bg-surface-secondary/50"
-                )}
-              >
-                <Text
-                  className={cn(
-                    "text-[11.5px] font-semibold capitalize",
-                    rail === entry ? "text-accent-foreground" : "text-muted"
-                  )}
-                >
-                  {entry}
-                  {/* margin is ignored on nested Text — the gap rides on a space. */}
-                  {railCounts[entry] ? <Text className="tabular-nums"> {railCounts[entry]}</Text> : null}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <ScrollView className="min-h-0 flex-1" contentContainerClassName="flex-col px-2.5 py-3">
-            {rail === "people" ? (
-              <View className="flex-col gap-2">
-                <View className="relative">
-                  {/* Icon takes classes only for color/size (react-native-svg
-                      cannot be styled by Uniwind), so the absolute placement —
-                      the web's start-2.5 top-1/2 -translate-y-1/2 on the LTR
-                      app — lives on a pointer-transparent wrapper. */}
-                  <View pointerEvents="none" className="absolute left-2.5 top-3">
-                    <Icon name="search" className="size-4 text-muted" strokeWidth={1.9} />
-                  </View>
-                  <TextInput
-                    value={peopleQuery}
-                    onChangeText={searchPeople}
-                    placeholder="Find another listener"
-                    accessibilityLabel="Find another listener"
-                    className="h-10 w-full rounded-xl border border-separator bg-surface-secondary/40 pl-9 pr-3 text-[13px] text-foreground"
-                    placeholderTextColorClassName="text-faint-foreground"
-                  />
-                </View>
-                <SectionTitle>On the dock</SectionTitle>
-                {people.map((person) => (
-                  <View key={person.id} className={ROW}>
-                    <Avatar person={person} online={isOnline(person.id)} />
-                    <View className="min-w-0 flex-1">
-                      {/* RN Text does not inherit the row's text-[13px]/tone, so
-                          each Text carries the web's effective style. */}
-                      <Text className="text-[13px] font-semibold text-foreground" numberOfLines={1}>
-                        {person.name}
-                      </Text>
-                      <Text className="text-[11px] text-muted" numberOfLines={1}>
-                        {person.online
-                          ? "Online now"
-                          : person.lastSeenAt
-                            ? `Last seen ${formatStamp(person.lastSeenAt)}`
-                            : "No thread yet"}
-                      </Text>
-                    </View>
-                    <View className="flex-none">
-                      {person.relation === "conversation" ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            const thread = conversations.find((item) => item.user.id === person.id);
-                            if (thread) selectConversation(thread.id);
-                          }}
-                        >
-                          Open
-                        </Button>
-                      ) : person.relation === "outgoing" ? (
-                        <Text className="text-[11px] font-medium text-muted">Request sent</Text>
-                      ) : person.relation === "incoming" ? (
-                        <Text className="text-[11px] font-semibold text-brand">Wants to chat</Text>
-                      ) : (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          loading={askBusy === person.id}
-                          onClick={() => {
-                            setAskBusy(person.id);
-                            void askToChat(person.id).finally(() => setAskBusy(null));
-                          }}
-                        >
-                          Ask to chat
-                        </Button>
-                      )}
-                    </View>
-                  </View>
-                ))}
-                {!people.length && !loading ? (
-                  <Text className="px-2.5 py-6 text-center text-[12px] text-muted">
-                    No other listeners here yet. Ask a friend to sign up — the community is only as
-                    good as its company.
-                  </Text>
+        {!activeId ? (
+          <View className="min-h-0 flex-1">
+            <View
+              accessibilityRole="tablist"
+              style={{
+                flexDirection: "row",
+                flexShrink: 0,
+                minHeight: 52,
+                marginHorizontal: 16,
+                backgroundColor,
+              }}
+            >
+              {RAILS.map((item) => {
+                const selected = rail === item.value;
+                const count = railCounts[item.value];
+                return (
+                  <Pressable
+                    key={item.value}
+                    accessibilityRole="tab"
+                    accessibilityLabel={item.label}
+                    accessibilityState={{ selected }}
+                    onPress={() => setRail(item.value)}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      minHeight: 52,
+                      paddingHorizontal: 4,
+                      paddingVertical: 12,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      borderBottomWidth: 2,
+                      borderBottomColor: selected ? accentColor : "transparent",
+                      opacity: pressed ? 0.65 : 1,
+                    })}
+                  >
+                    <Text
+                      style={{
+                        fontFamily: "Inter_600SemiBold",
+                        fontSize: 14,
+                        lineHeight: 22,
+                        textAlign: "center",
+                        color: selected ? foregroundColor : mutedColor,
+                      }}
+                    >
+                      {item.label}
+                      {count ? ` ${count > 99 ? "99+" : count}` : ""}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {rail !== "requests" ? (
+              <View className="mx-4 mb-2 mt-4 min-h-12 flex-row items-center gap-3 rounded-2xl bg-surface-secondary px-4">
+                <Icon name="search" size={18} className="text-muted" />
+                <TextInput
+                  value={searchValue}
+                  onChangeText={changeSearch}
+                  placeholder={rail === "people" ? "Find a listener" : "Find a conversation"}
+                  accessibilityLabel={rail === "people" ? "Find a listener" : "Find a conversation"}
+                  placeholderTextColor={mutedColor}
+                  selectionColor={accentColor}
+                  autoCorrect={false}
+                  maxLength={80}
+                  className="min-h-12 min-w-0 flex-1 text-sm text-foreground"
+                />
+                {searchValue ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear search"
+                    onPress={() => changeSearch("")}
+                    className="size-11 items-center justify-center"
+                  >
+                    <Icon name="x" size={16} className="text-muted" />
+                  </Pressable>
                 ) : null}
               </View>
             ) : null}
-
-            {rail === "requests" ? (
-              <View className="flex-col gap-4">
-                <View>
-                  <SectionTitle>Waiting for you</SectionTitle>
-                  {requests.incoming.length ? (
-                    requests.incoming.map((request) => (
-                      <View key={request.id} className={ROW}>
-                        <Avatar person={request.user} online={isOnline(request.user.id)} />
-                        <View className="min-w-0 flex-1">
-                          <Text className="text-[13px] font-semibold text-foreground" numberOfLines={1}>
-                            {request.user.name}
-                          </Text>
-                          <Text className="text-[11px] text-muted" numberOfLines={1}>
-                            Asked {formatStamp(request.createdAt)}
-                          </Text>
-                          <View className="mt-2 flex-row gap-1.5">
-                            <Button size="sm" onClick={() => void respondTo(request.id, true)}>
-                              Accept
-                            </Button>
-                            <Button variant="ghost" size="sm" onClick={() => void respondTo(request.id, false)}>
-                              Decline
-                            </Button>
-                          </View>
-                        </View>
-                      </View>
-                    ))
-                  ) : (
-                    <Text className="px-2.5 py-4 text-[12px] text-muted">Nobody is waiting.</Text>
-                  )}
-                </View>
-
-                <View>
-                  <SectionTitle>Asked by you</SectionTitle>
-                  {requests.outgoing.length ? (
-                    requests.outgoing.map((request) => (
-                      <View key={request.id} className={cn(ROW, "items-center")}>
-                        <Presence online={isOnline(request.user.id)} />
-                        <Text className="min-w-0 flex-1 text-[13px] text-muted" numberOfLines={1}>
-                          {request.user.name}
-                        </Text>
-                        <Text className="flex-none text-[11px] text-muted">Pending</Text>
-                      </View>
-                    ))
-                  ) : (
-                    <Text className="px-2.5 py-4 text-[12px] text-muted">
-                      You have not asked anyone yet.
-                    </Text>
-                  )}
-                </View>
-              </View>
-            ) : null}
-
             {rail === "threads" ? (
-              <View className="flex-col gap-1">
-                <SectionTitle>Threads</SectionTitle>
-                {conversations.length ? (
-                  conversations.map((thread) => (
-                    <Pressable
-                      key={thread.id}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: activeId === thread.id }}
-                      onPress={() => selectConversation(thread.id)}
-                      className={cn(
-                        ROW,
-                        activeId === thread.id
-                          ? "bg-surface-secondary text-foreground"
-                          : "text-muted"
-                      )}
-                    >
-                      <Avatar person={thread.user} online={isOnline(thread.user.id)} />
-                      <View className="min-w-0 flex-1">
-                        <View className="flex-row gap-2">
-                          <Text className="min-w-0 flex-1 text-[13px] font-semibold text-foreground" numberOfLines={1}>
-                            {thread.user.name}
-                          </Text>
-                          <Text className="flex-none text-[10px] tabular-nums text-faint-foreground">
-                            {formatStamp(thread.updatedAt)}
-                          </Text>
-                        </View>
-                        <View className="mt-1 flex-row items-center gap-2">
-                          <Text className="min-w-0 flex-1 text-[11.5px] text-muted" numberOfLines={1}>
-                            {thread.lastMessage
-                              ? `${thread.lastMessage.from === user?.id ? "You: " : ""}${thread.lastMessage.text}`
-                              : "Say hello"}
-                          </Text>
-                          {thread.unread ? (
-                            <View className="size-5 flex-none items-center justify-center rounded-full bg-accent">
-                              <Text className="text-[10px] font-bold text-accent-foreground tabular-nums">
-                                {thread.unread > 9 ? "9+" : thread.unread}
-                              </Text>
-                            </View>
-                          ) : (
-                            <Presence online={isOnline(thread.user.id)} size="sm" />
-                          )}
-                        </View>
-                      </View>
-                    </Pressable>
-                  ))
-                ) : (
-                  <Text className="px-2.5 py-6 text-[12px] text-muted">
-                    No threads yet. Find someone on the <Text className="font-bold">People</Text> tab and
-                    ask to chat — a thread opens the moment they accept.
-                  </Text>
-                )}
-              </View>
-            ) : null}
-          </ScrollView>
-        </View>
-      ) : null}
-
-      {/* Thread */}
-      {activeId ? (
-        <View className="min-h-0 flex-1 flex-col bg-surface-secondary/20">
-          {activeConversation ? (
-            <>
-              <View className="flex-none flex-row items-center gap-3 border-b border-separator px-3 py-3">
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel="Back to the list"
-                  onPress={() => selectConversation(null)}
-                  className="size-9 flex-none items-center justify-center rounded-lg"
-                >
-                  {/* The web draws a right-chevron rotated 180°; the same glyph
-                      is the kit's left chevron. */}
-                  <Icon name="chevron-left" className="size-4 text-muted" strokeWidth={2} />
-                </Pressable>
-                <Avatar person={activeConversation.user} online={isOnline(activeConversation.user.id)} />
-                <View className="min-w-0 flex-1">
-                  <Text className="text-[13px] font-semibold text-foreground" numberOfLines={1}>
-                    {activeConversation.user.name}
-                  </Text>
-                  <Text
-                    className={cn("text-[11px]", typingLabel ? "text-brand" : "text-muted")}
-                    numberOfLines={1}
+              <FlatList
+                data={threads}
+                keyExtractor={(item) => item.id}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}
+                initialNumToRender={12}
+                windowSize={7}
+                ListEmptyComponent={
+                  loading ? (
+                    <LoadingChat />
+                  ) : (
+                    <EmptyChat
+                      title={chatQuery ? "No conversations found" : "Start a conversation"}
+                      description={
+                        chatQuery
+                          ? "Try another listener’s name."
+                          : "Find a listener, say hello, and talk about the music you love."
+                      }
+                      action={
+                        !chatQuery ? (
+                          <Button onClick={() => setRail("people")}>Find people</Button>
+                        ) : undefined
+                      }
+                    />
+                  )
+                }
+                renderItem={({ item: thread }) => (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Chat with ${thread.user.name}${thread.unread ? `, ${thread.unread} unread messages` : ""}`}
+                    onPress={() => openConversation(thread.id)}
+                    className={cn(ROW, "active:opacity-60")}
                   >
-                    {typingLabel ??
-                      (activeConversation.user.online
-                        ? "Online now"
-                        : activeConversation.user.lastSeenAt
-                          ? `Last seen ${formatStamp(activeConversation.user.lastSeenAt)}`
-                          : "Offline")}
-                  </Text>
-                </View>
-              </View>
-
-              <View className="min-h-0 flex-1">
-                <FlatList
-                  ref={listRef}
-                  data={rows}
-                  inverted
-                  keyExtractor={(row) => row.key}
-                  renderItem={({ item: row }) =>
-                    row.kind === "day" ? (
-                      <Text className="py-2 text-center text-[10px] font-semibold uppercase tracking-[0.14em] text-faint-foreground">
-                        {row.day}
-                      </Text>
-                    ) : (
-                      <View
-                        className={cn(
-                          "flex-row py-1",
-                          row.message.mine ? "justify-end" : "justify-start",
-                          row.message.pending && "opacity-60"
-                        )}
+                    <Avatar person={thread.user} online={isOnline(thread.user)} />
+                    <View className="min-w-0 flex-1 gap-1.5">
+                      <View className="flex-row items-center gap-2">
+                        <Text
+                          numberOfLines={1}
+                          className="min-w-0 flex-1 text-base font-semibold text-foreground"
+                        >
+                          {thread.user.name}
+                        </Text>
+                        <Text className="text-[11px] text-muted">
+                          {formatStamp(thread.updatedAt)}
+                        </Text>
+                      </View>
+                      <Text
+                        numberOfLines={1}
+                        style={{ color: mutedColor, fontSize: 11, lineHeight: 16 }}
                       >
-                        <View
+                        {presenceLabel(thread.user)}
+                      </Text>
+                      <View className="flex-row items-center gap-3">
+                        <Text
+                          numberOfLines={1}
                           className={cn(
-                            "max-w-[86%] rounded-2xl px-3.5 py-2.5",
-                            row.message.mine ? "bg-accent" : "border border-separator bg-background"
+                            "flex-1 text-sm",
+                            thread.unread ? "font-medium text-foreground" : "text-muted"
                           )}
                         >
-                          <Text
-                            className={cn(
-                              "text-[13.5px] leading-relaxed",
-                              row.message.mine ? "text-accent-foreground" : "text-foreground"
-                            )}
-                          >
-                            {row.message.text}
-                          </Text>
-                          {/* The web colours the whole stamp row; RN paints only
-                              Text, so each piece carries its own tone class. */}
-                          <View className="mt-1 flex-row items-center justify-end gap-1.5">
-                            <Text
-                              className={cn(
-                                "text-[10px]",
-                                row.message.mine ? "text-accent-foreground/75" : "text-faint-foreground"
-                              )}
-                            >
-                              {formatTime(row.message.createdAt)}
+                          {thread.lastMessage
+                            ? `${thread.lastMessage.from === user?.id ? "You: " : ""}${thread.lastMessage.text}`
+                            : "Say hello"}
+                        </Text>
+                        {thread.unread ? (
+                          <View className="min-w-5 items-center justify-center rounded-full bg-accent px-1.5 py-0.5">
+                            <Text className="text-[10px] font-bold text-accent-foreground">
+                              {thread.unread > 99 ? "99+" : thread.unread}
                             </Text>
-                            {row.message.pending ? (
-                              <Text
-                                className={cn(
-                                  "text-[10px]",
-                                  row.message.mine ? "text-accent-foreground/75" : "text-faint-foreground"
-                                )}
-                              >
-                                sending…
-                              </Text>
-                            ) : row.message.failed ? (
-                              <Pressable
-                                accessibilityRole="button"
-                                onPress={() => retryMessage(row.message.clientId)}
-                              >
-                                <Text className="text-[10px] font-semibold text-danger underline">
-                                  failed — retry
-                                </Text>
-                              </Pressable>
-                            ) : null}
                           </View>
+                        ) : null}
+                      </View>
+                    </View>
+                  </Pressable>
+                )}
+              />
+            ) : null}
+            {rail === "people" ? (
+              <FlatList
+                data={people}
+                keyExtractor={(person) => person.id}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}
+                initialNumToRender={12}
+                windowSize={7}
+                ListEmptyComponent={
+                  loading ? (
+                    <LoadingChat />
+                  ) : (
+                    <EmptyChat
+                      title={peopleQuery ? "No listeners found" : "Meet your next music friend"}
+                      description={
+                        peopleQuery
+                          ? "Try a different name or clear your search."
+                          : "Other listeners will appear here when they join the community."
+                      }
+                    />
+                  )
+                }
+                renderItem={({ item: person }) => (
+                  <View className={ROW}>
+                    <Avatar person={person} online={isOnline(person)} />
+                    <View className="min-w-0 flex-1">
+                      <Text numberOfLines={1} className="text-sm font-semibold text-foreground">
+                        {person.name}
+                      </Text>
+                      <Text numberOfLines={1} className="mt-1 text-xs text-muted">
+                        {presenceLabel(person)}
+                      </Text>
+                    </View>
+                    {person.relation === "conversation" ? (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          const thread = conversations.find((item) => item.user.id === person.id);
+                          if (thread) openConversation(thread.id);
+                        }}
+                      >
+                        Chat
+                      </Button>
+                    ) : person.relation === "outgoing" ? (
+                      <Text className="text-xs text-muted">Requested</Text>
+                    ) : person.relation === "incoming" ? (
+                      <Button variant="secondary" size="sm" onClick={() => setRail("requests")}>
+                        Review
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        disabled={busyId !== null}
+                        loading={busyId === person.id}
+                        onClick={() => void runAction(person.id, () => askToChat(person.id))}
+                      >
+                        Say hello
+                      </Button>
+                    )}
+                  </View>
+                )}
+              />
+            ) : null}
+            {rail === "requests" ? (
+              <ScrollView
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}
+              >
+                <SectionTitle>Waiting for you</SectionTitle>
+                {requests.incoming.length ? (
+                  requests.incoming.map((request) => (
+                    <View key={request.id} className={cn(ROW, "items-start")}>
+                      <Avatar person={request.user} online={isOnline(request.user)} />
+                      <View className="min-w-0 flex-1">
+                        <Text numberOfLines={1} className="text-base font-semibold text-foreground">
+                          {request.user.name}
+                        </Text>
+                        <Text className="mt-1 text-xs text-muted">Would like to chat with you</Text>
+                        <View className="mt-3 flex-row gap-2">
+                          <Button
+                            size="sm"
+                            disabled={busyId !== null}
+                            loading={busyId === request.id}
+                            onClick={() =>
+                              void runAction(request.id, () => respondTo(request.id, true))
+                            }
+                          >
+                            Accept
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busyId !== null}
+                            onClick={() =>
+                              void runAction(request.id, () => respondTo(request.id, false))
+                            }
+                          >
+                            Decline
+                          </Button>
                         </View>
                       </View>
-                    )
-                  }
-                  onScroll={onThreadScroll}
-                  onMomentumScrollEnd={onThreadScroll}
-                  scrollEventThrottle={16}
-                  contentContainerClassName="flex-col px-3 py-4"
-                  style={{ flex: 1 }}
-                  ListFooterComponent={
-                    olderLoading ? (
-                      <Text className="pb-3 text-center text-[11px] text-muted">
-                        Loading older messages…
-                      </Text>
-                    ) : undefined
-                  }
-                  ListEmptyComponent={
-                    !loading ? (
-                      <View className="flex-1">
-                        <Text className="pt-8 text-center text-[12px] text-muted">
-                          Nothing said yet. Break it — what are you listening to?
+                    </View>
+                  ))
+                ) : (
+                  <Text className="py-5 text-sm text-muted">You’re all caught up.</Text>
+                )}
+                <SectionTitle>Sent requests</SectionTitle>
+                {requests.outgoing.length ? (
+                  requests.outgoing.map((request) => (
+                    <View key={request.id} className={ROW}>
+                      <Avatar person={request.user} online={isOnline(request.user)} />
+                      <View className="min-w-0 flex-1">
+                        <Text numberOfLines={1} className="text-sm font-semibold text-foreground">
+                          {request.user.name}
                         </Text>
+                        <Text className="mt-1 text-xs text-muted">Waiting for a reply</Text>
                       </View>
-                    ) : undefined
-                  }
-                />
-              </View>
-
-              <View className="flex-none border-t border-separator px-3 py-3">
-                <View className="flex-row items-end gap-2">
-                  <TextInput
-                    ref={composerRef}
-                    value={draft}
-                    multiline
-                    maxLength={MAX_CHAT_MESSAGE}
-                    accessibilityLabel={`Message to ${activeConversation.user.name}`}
-                    placeholder="Write a message…"
-                    onChangeText={(text) => {
-                      // The provider throttles reportTyping; keep the web's
-                      // hard clamp as well as the maxLength attribute.
-                      setDraft(text.slice(0, MAX_CHAT_MESSAGE));
-                      reportTyping();
-                    }}
-                    // Enter-to-send arrives as the keyboard's Send key
-                    // (`submitBehavior="submit"` + keyboardReturnKey="send");
-                    // the web's Enter-without-Shift keydown listener is
-                    // dropped. Shift+Enter starting a line is not a thing on
-                    // native soft keyboards — the field stays multiline so
-                    // long drafts wrap and pasted text keeps its line breaks.
-                    submitBehavior="submit"
-                    returnKeyType="send"
-                    onSubmitEditing={() => void submit()}
-                    blurOnSubmit={false}
-                    className="max-h-32 min-h-11 flex-1 rounded-xl border border-separator bg-background px-3 py-2.5 text-[13.5px] leading-relaxed text-foreground"
-                    placeholderTextColorClassName="text-faint-foreground"
-                    textAlignVertical="top"
+                      <Text className="text-xs text-muted">Pending</Text>
+                    </View>
+                  ))
+                ) : (
+                  <Text className="py-5 text-sm text-muted">
+                    Your invitations will appear here.
+                  </Text>
+                )}
+              </ScrollView>
+            ) : null}
+          </View>
+        ) : activeConversation ? (
+          <View className="min-h-0 flex-1">
+            <FlatList
+              key={activeId}
+              ref={listRef}
+              data={rows}
+              inverted
+              keyExtractor={(row) => row.key}
+              style={{ flex: 1 }}
+              contentContainerStyle={{ paddingHorizontal: 20, paddingVertical: 12 }}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+              showsVerticalScrollIndicator={false}
+              initialNumToRender={20}
+              maxToRenderPerBatch={12}
+              windowSize={7}
+              maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+              onScroll={onThreadScroll}
+              onMomentumScrollEnd={onThreadScroll}
+              scrollEventThrottle={32}
+              renderItem={({ item }) =>
+                item.kind === "day" ? (
+                  <View className="items-center py-4">
+                    <View className="rounded-full bg-surface-secondary px-3 py-1.5">
+                      <Text className="text-[11px] font-medium text-muted">{item.day}</Text>
+                    </View>
+                  </View>
+                ) : (
+                  <MessageBubble message={item.message} retry={retryMessage} />
+                )
+              }
+              ListFooterComponent={
+                olderLoading ? <LoadingChat label="Loading earlier messages" /> : undefined
+              }
+              ListEmptyComponent={
+                loading ? (
+                  <LoadingChat />
+                ) : (
+                  <EmptyChat
+                    title={`Say hello to ${activeConversation.user.name.split(" ")[0]}`}
+                    description="A favorite song is a good place to start."
                   />
-                  <Button
-                    size="icon"
-                    onClick={() => void submit()}
-                    // The web only blanks on an empty draft; native also waits
-                    // for the live socket before a send can look trustworthy.
-                    disabled={!draft.trim() || !connected}
-                    loading={sending}
-                    title="Send"
-                  >
-                    <Icon name="send" className="size-4" strokeWidth={2.1} />
-                  </Button>
-                </View>
-                <View className="flex-row items-center justify-between px-1 pt-1.5">
-                  <Text className="text-[10px] text-faint-foreground">
-                    Enter sends · Shift+Enter starts a line · text only
+                )
+              }
+            />
+            <View className="px-4 pb-2 pt-3">
+              <View className="flex-row items-end gap-2 rounded-3xl bg-surface-secondary p-1.5 pl-4">
+                <TextInput
+                  value={draft}
+                  multiline
+                  maxLength={MAX_CHAT_MESSAGE}
+                  accessibilityLabel={`Message to ${activeConversation.user.name}`}
+                  placeholder="Write a message…"
+                  placeholderTextColor={mutedColor}
+                  selectionColor={accentColor}
+                  onChangeText={(text) => {
+                    const next = text.slice(0, MAX_CHAT_MESSAGE);
+                    setDrafts((current) => ({ ...current, [draftKey]: next }));
+                    if (next.trim()) reportTyping();
+                    else reportTypingStop();
+                  }}
+                  onBlur={reportTypingStop}
+                  submitBehavior="submit"
+                  returnKeyType="send"
+                  onSubmitEditing={() => void submit()}
+                  textAlignVertical="top"
+                  className="max-h-32 min-h-11 min-w-0 flex-1 py-2.5 text-[15px] leading-6 text-foreground"
+                />
+                <Button
+                  size="icon"
+                  className="size-11 rounded-full"
+                  onClick={() => void submit()}
+                  disabled={!draft.trim() || !connected || sending}
+                  loading={sending}
+                  accessibilityLabel="Send message"
+                >
+                  <Icon name="send" size={18} />
+                </Button>
+              </View>
+              {!connected || draft.length > MAX_CHAT_MESSAGE - 200 ? (
+                <View className="mt-2 flex-row justify-between px-3">
+                  <Text className="flex-1 text-[11px] text-muted">
+                    {!connected ? "Reconnecting… Your draft stays here." : ""}
                   </Text>
                   {draft.length > MAX_CHAT_MESSAGE - 200 ? (
-                    <Text className="text-[10px] tabular-nums text-faint-foreground">
+                    <Text className="text-[11px] tabular-nums text-muted">
                       {draft.length}/{MAX_CHAT_MESSAGE}
                     </Text>
                   ) : null}
                 </View>
-              </View>
-            </>
-          ) : null}
-        </View>
-      ) : null}
+              ) : null}
+            </View>
+          </View>
+        ) : loading ? (
+          <LoadingChat />
+        ) : (
+          <EmptyChat
+            title="Conversation unavailable"
+            description="Return to your chats and try opening it again."
+            action={
+              <Button variant="secondary" onClick={backToInbox}>
+                Back to chats
+              </Button>
+            }
+          />
+        )}
+      </View>
+    </KeyboardAvoidingView>
+  );
+}
+function LoadingChat({ label = "Loading…" }: { label?: string }) {
+  return (
+    <View
+      accessibilityRole="progressbar"
+      accessibilityLabel={label}
+      className="items-center gap-3 py-8"
+    >
+      <ActivityIndicator />
+      <Text className="text-xs text-muted">{label}</Text>
     </View>
   );
 }
-
-/** The (app)/chat route wraps this with `{ onClose }` for the modal dismiss. */
 export default ChatPanel;

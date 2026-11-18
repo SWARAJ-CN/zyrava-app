@@ -1,12 +1,28 @@
+import { useCustomization } from "@/components/providers/CustomizationProvider";
+import { useAuth } from "@/components/providers/AuthProvider";
+import { CustomizationConsole } from "@/components/features/customization/CustomizationConsole";
+import { PaymentsHistory } from "@/components/features/customization/PaymentsHistory";
+import { PersonalHeader } from "@/components/features/music/PersonalHeader";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pressable, ScrollView, Text, View, type ScrollViewInstance } from "react-native";
-import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  type ScrollViewInstance,
+} from "react-native";
 import { Image } from "expo-image";
 import { useLocalSearchParams } from "expo-router";
 import type { JSX } from "react";
 
-import { Pagination, PageHeader, SegmentedControl } from "@/components/ui/Controls";
-import { Card, CardContent, CardHeader } from "@/components/ui/Card";
+import { Pagination, PageHeader } from "@/components/ui/Controls";
+import {
+  HomeTabs,
+  HomeTabPanel,
+  HOME_TABS,
+  type HomeTab,
+} from "@/components/features/music/HomeTabs";
 import { Button } from "@/components/ui/Button";
 import { EmptyState, Notice, Skeleton, Spinner } from "@/components/ui/Feedback";
 import { Icon } from "@/components/ui/icons";
@@ -33,7 +49,13 @@ import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
 import { useLibrary } from "@/components/providers/LibraryProvider";
 import { useOffline } from "@/components/providers/OfflineProvider";
 import { rankSongs } from "@/lib/recommend";
-import { dedupeSongs, searchSongs, songFingerprint, type Song } from "@/lib/saavn";
+import {
+  dedupeSongs,
+  searchSongs,
+  searchSongMatches,
+  songFingerprint,
+  type Song,
+} from "@/lib/saavn";
 import { cn } from "@/lib/cn";
 
 /* ------------------------------------------------------------------ *
@@ -70,25 +92,6 @@ const VIEW_OPTIONS = [
 
 const DEFAULT_VIEW: ViewMode = "list";
 
-const HOME_TABS = [
-  { value: "songs", label: "Songs" },
-  { value: "playlists", label: "Playlists" },
-  { value: "liked", label: "Liked songs" },
-  { value: "downloads", label: "Downloads" },
-  { value: "offline", label: "Offline" },
-] as const;
-
-type HomeTab = (typeof HOME_TABS)[number]["value"];
-
-/** The quiet word at the end of the tab bar, one per panel. */
-const TAB_EYEBROW: Record<HomeTab, string> = {
-  songs: "Catalogue",
-  playlists: "Collections",
-  liked: "Saved",
-  downloads: "On this device",
-  offline: "Your files",
-};
-
 /** Grid columns for phone widths: the web's `sm:` steps never apply here. */
 const GRID_COLS: Record<Exclude<ViewMode, "list">, number> = {
   small: 3,
@@ -108,12 +111,12 @@ type PagePayload = { songs?: Song[]; total?: number };
 type PageResult = PagePayload | { error: string } | null;
 
 export default function MusicPage(): JSX.Element {
+  const { personal } = useCustomization();
+  const { user } = useAuth();
   const [input, setInput] = useState("");
   const [term, setTerm] = useState<string>(REGIONS[0].label);
   /** Pages skipped before the feed opens — drawn once per visit. */
-  const [feedOffset, setFeedOffset] = useState(() =>
-    Math.floor(Math.random() * FEED_ROTATION)
-  );
+  const [feedOffset, setFeedOffset] = useState(() => Math.floor(Math.random() * FEED_ROTATION));
   const [batch, setBatch] = useState(0);
   /** Bumped by "Retry" to force a refetch without changing the query. */
   const [attempt, setAttempt] = useState(0);
@@ -121,7 +124,7 @@ export default function MusicPage(): JSX.Element {
   const [homeTab, setHomeTab] = useState<HomeTab>("songs");
   const { isGuest, requireAuth } = useGuestLock();
 
-  const params = useLocalSearchParams<{ tab?: string }>();
+  const params = useLocalSearchParams<{ tab?: string; section?: string; visit?: string }>();
 
   /* The launcher shortcut (home-screen widget / deep link) lands on
      /?tab=liked and friends — the chosen panel is honoured once, on arrival.
@@ -131,9 +134,10 @@ export default function MusicPage(): JSX.Element {
     if (!HOME_TABS.some((entry) => entry.value === asked)) return;
     const wanted = asked as HomeTab;
     if (isGuest && wanted !== "songs") return;
+    if (personal && (wanted === "customize" || wanted === "payments")) return;
     const timer = setTimeout(() => setHomeTab(wanted), 0);
     return () => clearTimeout(timer);
-  }, [isGuest, params.tab]);
+  }, [isGuest, params.tab, params.visit, personal]);
   const [importOpen, setImportOpen] = useState(false);
 
   /* Multi-check filters — languages and "why am I listening" vibes. */
@@ -157,6 +161,7 @@ export default function MusicPage(): JSX.Element {
     queue,
     index,
     playing,
+    loading: trackLoading,
     queueLabel,
     visualizerReady,
     getAnalyser,
@@ -177,24 +182,68 @@ export default function MusicPage(): JSX.Element {
   /* ── Scroll plumbing (replaces scrollIntoView) ─────────────────────── */
   const scrollRef = useRef<ScrollViewInstance>(null);
   const anchors = useRef<Record<string, number>>({});
+  const contentOffset = useRef(0);
+  const pendingAnchor = useRef<string | null>(null);
+  const sectionVisit = useRef<string | null>(null);
   const scrollToAnchor = useCallback((key: string) => {
+    if (!scrollRef.current) {
+      pendingAnchor.current = key;
+      return;
+    }
+    if (key === "top") {
+      scrollRef.current?.scrollTo({ y: 0, animated: true });
+      return;
+    }
     const y = anchors.current[key];
-    if (typeof y === "number") scrollRef.current?.scrollTo({ y: Math.max(0, y - 8), animated: true });
+    if (typeof y === "number")
+      scrollRef.current?.scrollTo({
+        y: Math.max(0, y + contentOffset.current - 8),
+        animated: true,
+      });
+    else pendingAnchor.current = key;
   }, []);
   const anchor = useCallback(
     (key: string) => (event: { nativeEvent: { layout: { y: number } } }) => {
       anchors.current[key] = event.nativeEvent.layout.y;
+      if (pendingAnchor.current === key) {
+        pendingAnchor.current = null;
+        scrollToAnchor(key);
+      }
     },
-    []
+    [scrollToAnchor]
   );
+  useEffect(() => {
+    if (!params.section || homeTab !== "songs") return;
+    const visit = `${params.visit ?? ""}:${params.section}`;
+    if (sectionVisit.current === visit) return;
+    const frame = requestAnimationFrame(() => {
+      sectionVisit.current = visit;
+      scrollToAnchor(params.section!);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [params.section, params.visit, homeTab, scrollToAnchor]);
+
+  useEffect(() => {
+    if (homeTab !== "songs" || !pendingAnchor.current) return;
+    const frame = requestAnimationFrame(() => {
+      const key = pendingAnchor.current;
+      pendingAnchor.current = null;
+      if (key) scrollToAnchor(key);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [homeTab, scrollToAnchor]);
 
   /** First look at the Offline tab is the import pitch. Only the song feed is
    *  a guest's to browse; the shelves that hold a listener's own things are not. */
-  const openTab = (value: HomeTab) => {
-    if (value !== "songs" && !requireAuth("tab")) return;
-    setHomeTab(value);
-    if (value === "offline" && !locals.length) setImportOpen(true);
-  };
+  const openTab = useCallback(
+    (value: HomeTab) => {
+      if (value !== "songs" && !requireAuth("tab")) return;
+      if (personal && (value === "customize" || value === "payments")) return;
+      setHomeTab(value);
+      if (value === "offline" && !locals.length) setImportOpen(true);
+    },
+    [requireAuth, locals.length, personal]
+  );
 
   const baseRegion = useMemo(
     () => REGIONS.find((candidate) => candidate.label === term) ?? REGIONS[0],
@@ -203,10 +252,7 @@ export default function MusicPage(): JSX.Element {
 
   /** A region chip was picked (or nothing was typed) — otherwise this is a
    *  free-text search, and the typed phrase becomes the query itself. */
-  const isRegion = useMemo(
-    () => REGIONS.some((candidate) => candidate.label === term),
-    [term]
-  );
+  const isRegion = useMemo(() => REGIONS.some((candidate) => candidate.label === term), [term]);
   const freeText = isRegion ? "" : term.trim();
   /** Catalogue playlist query: the typed phrase, or the region's own opener. */
   const playlistQuery = freeText || baseRegion.queries[0] || "top playlists";
@@ -334,9 +380,7 @@ export default function MusicPage(): JSX.Element {
         }
       } else if (!value) {
         setTerm((current) =>
-          REGIONS.some((candidate) => candidate.label === current)
-            ? current
-            : REGIONS[0].label
+          REGIONS.some((candidate) => candidate.label === current) ? current : REGIONS[0].label
         );
         setBatch(0);
       }
@@ -382,15 +426,9 @@ export default function MusicPage(): JSX.Element {
     // · no vibes: the region's own queries as before.
     const combos: { query: string; page: number }[] = [];
     if (freeText) {
-      // A typed phrase is the query. Checked vibes narrow it; checked
-      // languages only re-rank the results below.
-      if (activeVibes.length) {
-        for (const vibe of activeVibes) {
-          combos.push({ query: `${freeText} ${vibe.queries[0]}`, page: firstPage + batch });
-        }
-      } else {
-        combos.push({ query: freeText, page: firstPage + batch });
-      }
+      // A named-song lookup stays intact; mood/language preferences only
+      // break ranking ties, never rewrite the title sent to the catalogue.
+      combos.push({ query: freeText, page: firstPage + batch });
     } else {
       for (const activeRegion of activeRegions) {
         if (!activeVibes.length) {
@@ -417,12 +455,10 @@ export default function MusicPage(): JSX.Element {
       }
     }
 
-    /** The route-handler contract, in-process: over-fetch 1.7× and slice. */
+    /** searchSongs applies the web route's limits and duplicate headroom. */
     const fetchPage = (query: string, page: number): Promise<PageResult> => {
-      const limit = PAGE_SIZE;
-      const over = Math.min(30, Math.max(limit, Math.ceil(limit * 1.7)));
-      return searchSongs(query, over, page)
-        .then((payload) => ({ songs: payload.songs.slice(0, limit), total: payload.total }))
+      return (freeText ? searchSongMatches : searchSongs)(query, PAGE_SIZE, page)
+        .then((payload) => ({ songs: payload.songs, total: payload.total }))
         .catch((cause: unknown) => {
           // One flaky page must not sink the whole batch.
           return { error: cause instanceof Error ? cause.message : "Search failed." };
@@ -512,10 +548,7 @@ export default function MusicPage(): JSX.Element {
   /** True while the first results for a new query are still on the wire. */
   const listLoading = fetching && songs.length === 0;
   /** Pages left to walk, counted from wherever this visit opened. */
-  const pageCount = Math.max(
-    1,
-    Math.ceil((library.total - (firstPage - 1) * pageSize) / pageSize)
-  );
+  const pageCount = Math.max(1, Math.ceil((library.total - (firstPage - 1) * pageSize) / pageSize));
 
   /* ── Page chaining ─────────────────────────────────────────────────────
    * The last track of a page turns the page, and the fresh ten join the queue
@@ -550,7 +583,19 @@ export default function MusicPage(): JSX.Element {
       setBatch((value) => value + 1);
     });
     return () => cancelAnimationFrame(frame);
-  }, [playing, shuffle, repeat, queue, index, termKey, batch, fetching, error, songs.length, pageCount]);
+  }, [
+    playing,
+    shuffle,
+    repeat,
+    queue,
+    index,
+    termKey,
+    batch,
+    fetching,
+    error,
+    songs.length,
+    pageCount,
+  ]);
 
   useEffect(() => {
     const active = chain.current;
@@ -663,29 +708,8 @@ export default function MusicPage(): JSX.Element {
     </View>
   );
 
-  /* Tab underline — the web's framer-motion layoutId, in Reanimated. */
-  const [tabFrames, setTabFrames] = useState<Record<string, { x: number; width: number }>>({});
-  const underlineX = useSharedValue(0);
-  const underlineW = useSharedValue(0);
-  useEffect(() => {
-    const frame = tabFrames[homeTab];
-    if (!frame) return;
-    underlineX.value = withSpring(frame.x, { stiffness: 480, damping: 36 });
-    underlineW.value = withSpring(frame.width - 16, { stiffness: 480, damping: 36 });
-  }, [homeTab, tabFrames, underlineW, underlineX]);
-  const underlineStyle = useAnimatedStyle(() => ({
-    transform: [{ translateX: underlineX.value }],
-    width: underlineW.value,
-  }));
-
-  return (
-    <ScrollView
-      ref={scrollRef}
-      className="flex-1 bg-background"
-      contentContainerStyle={{ flexGrow: 1, paddingBottom: 96, paddingTop: 20, paddingHorizontal: 16 }}
-      keyboardShouldPersistTaps="handled"
-      showsVerticalScrollIndicator={false}
-    >
+  const pageHeader = (
+    <>
       {/* Oversized wordmark — the song's RGB inside the letters flooding on
           every beat. Absolutely placed so it owns no layout space. */}
       <View className="relative">
@@ -715,8 +739,11 @@ export default function MusicPage(): JSX.Element {
               value={input}
               onChange={setInput}
               onPick={(song) => startQueue([song], song.title, 0)}
-              onCommit={() => {
-                // Enter means "show me what you found".
+              onCommit={(query) => {
+                setTerm(query);
+                setBatch(0);
+                // Enter returns to the retained search results.
+                setHomeTab("songs");
                 scrollToAnchor("library-list");
               }}
               className="w-full"
@@ -725,60 +752,34 @@ export default function MusicPage(): JSX.Element {
         />
       </View>
 
-      {/* Primary home tabs — everything below switches with them. */}
-      <View className="mt-6 flex-row items-end gap-1 border-b border-separator">
-        <ScrollView horizontal className="flex-1" showsHorizontalScrollIndicator={false}>
-          <View className="flex-row items-end gap-1">
-            {HOME_TABS.map((entry) => {
-              const isActive = homeTab === entry.value;
-              return (
-                <View
-                  key={entry.value}
-                  onLayout={(event) =>
-                    setTabFrames((prev) => ({
-                      ...prev,
-                      [entry.value]: {
-                        x: event.nativeEvent.layout.x,
-                        width: event.nativeEvent.layout.width,
-                      },
-                    }))
-                  }
-                >
-                  <Pressable
-                    onPress={() => openTab(entry.value)}
-                    className={cn(
-                      "h-10 flex-none items-center justify-center px-3.5",
-                      isActive ? "" : "opacity-70"
-                    )}
-                  >
-                    <Text
-                      className={cn(
-                        "whitespace-nowrap text-[13px] font-semibold",
-                        isActive ? "text-foreground" : "text-muted"
-                      )}
-                    >
-                      {entry.label}
-                    </Text>
-                  </Pressable>
-                </View>
-              );
-            })}
-            <Animated.View
-              className="absolute -bottom-px h-0.5 rounded-full bg-accent"
-              style={underlineStyle}
-            />
-          </View>
-        </ScrollView>
-        <Text className="ms-auto flex-none pb-3 text-[10px] font-medium uppercase tracking-[1.6px] text-faint-foreground">
-          {TAB_EYEBROW[homeTab]}
-        </Text>
-      </View>
+      <PersonalHeader />
+      <HomeTabs value={homeTab} onChange={openTab} />
+    </>
+  );
+  const panelStyle = {
+    flexGrow: 1,
+    paddingBottom: queue.length ? 260 : 32,
+    paddingTop: 16,
+    paddingHorizontal: 16,
+  };
 
-      <Animated.View key={homeTab} entering={FadeInDown.duration(180)}>
-        {homeTab === "songs" ? (
-          <View className="mt-4">
+  return (
+    <View className="flex-1 bg-background">
+      <View className="px-4 pt-4">{pageHeader}</View>
+      <HomeTabPanel active={homeTab === "songs"}>
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={panelStyle}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <View
+            onLayout={(event) => {
+              contentOffset.current = event.nativeEvent.layout.y;
+            }}
+          >
             {/* Multi-check filter bar — the top section's quick pickers. */}
-            <View className="rounded-xl border border-separator bg-surface shadow-field">
+            <View className="py-1">
               <View className="flex-row items-center justify-between gap-3 px-3.5 pt-3 pb-1">
                 <Text className="text-[11px] font-bold uppercase tracking-[1.4px] text-muted-foreground">
                   Filters
@@ -861,11 +862,7 @@ export default function MusicPage(): JSX.Element {
             </View>
 
             {/* One scrolling rail of language cards. */}
-            <View
-              nativeID="region-library"
-              onLayout={anchor("region-library")}
-              className="mt-8 p-4"
-            >
+            <View nativeID="region-library" onLayout={anchor("region-library")} className="mt-8">
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -878,8 +875,8 @@ export default function MusicPage(): JSX.Element {
                       key={candidate.label}
                       onPress={() => openRegion(candidate.label)}
                       className={cn(
-                        "relative aspect-square w-32 flex-none overflow-hidden rounded-lg shadow-field",
-                        isActive ? "border-2 border-brand" : "border border-separator"
+                        "relative aspect-square w-32 flex-none overflow-hidden",
+                        isActive ? "opacity-100" : "opacity-80"
                       )}
                     >
                       {covers[candidate.label] ? (
@@ -890,8 +887,10 @@ export default function MusicPage(): JSX.Element {
                         />
                       ) : (
                         <View
-                          className="absolute inset-0 items-center justify-center"
-                          style={{ backgroundColor: candidate.tone }}
+                          className={cn(
+                            "absolute inset-0 items-center justify-center",
+                            candidate.toneClassName
+                          )}
                         >
                           <Icon name="globe" className="size-8" color="rgba(0,0,0,0.6)" />
                         </View>
@@ -910,7 +909,9 @@ export default function MusicPage(): JSX.Element {
                         )}
                       </View>
                       <View className="absolute inset-x-0 bottom-0 p-3">
-                        <Text className="truncate text-sm font-bold text-white">{candidate.label}</Text>
+                        <Text className="truncate text-sm font-bold text-white">
+                          {candidate.label}
+                        </Text>
                         <Text className="truncate text-[11px] text-white/80">{candidate.hint}</Text>
                       </View>
                     </Pressable>
@@ -923,51 +924,62 @@ export default function MusicPage(): JSX.Element {
               <Text className="text-lg font-bold tracking-tight text-foreground">
                 {isRegion ? `${term} · music` : "Search results"}
               </Text>
-              <View className="flex-row flex-wrap items-center gap-2">
+              <View className="w-full min-w-0 flex-row flex-wrap items-center gap-2">
                 <Pressable
                   onPress={shufflePlay}
                   disabled={!songs.length}
                   className={cn(
-                    "h-9 flex-row items-center gap-2 rounded-full border px-3.5",
+                    "min-h-11 flex-row items-center gap-2 px-3.5",
                     !songs.length && "opacity-40",
-                    shuffle
-                      ? "border-transparent bg-accent-soft"
-                      : "border-separator"
+                    shuffle ? "bg-accent-soft" : "bg-surface-secondary"
                   )}
                 >
                   <Icon name="shuffle" className="size-3.5" />
                   <Text
-                    className={cn(
-                      "text-xs font-semibold",
-                      shuffle ? "text-brand" : "text-muted"
-                    )}
+                    className={cn("text-xs font-semibold", shuffle ? "text-brand" : "text-muted")}
                   >
                     Shuffle
                   </Text>
                 </Pressable>
-                {freeText ? null : (
-                  <Pressable
-                    onPress={refreshFeed}
-                    disabled={fetching}
-                    className={cn(
-                      "h-9 flex-row items-center gap-2 rounded-full border border-separator px-3.5",
-                      fetching && "opacity-40"
-                    )}
+                <View className="max-w-full flex-row items-center gap-2">
+                  {freeText ? null : (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Refresh music"
+                      accessibilityState={{ disabled: fetching, busy: fetching }}
+                      onPress={refreshFeed}
+                      disabled={fetching}
+                      className={cn(
+                        "size-11 items-center justify-center active:bg-surface-secondary",
+                        fetching && "opacity-40"
+                      )}
+                    >
+                      <Icon name="refresh" className="size-4 text-muted" />
+                    </Pressable>
+                  )}
+                  <View
+                    accessibilityLabel="Library view"
+                    className="flex-row items-center gap-0.5 bg-surface-secondary p-0.5"
                   >
-                    <Icon name="refresh" className="size-3.5 text-muted" />
-                    <Text className="text-xs font-semibold text-muted">Refresh</Text>
-                  </Pressable>
-                )}
-                <SegmentedControl
-                  options={VIEW_OPTIONS.map((option) => ({
-                    value: option.value,
-                    label: option.label,
-                    icon: option.icon,
-                  }))}
-                  value={view}
-                  onChange={(value) => setView(value as ViewMode)}
-                  ariaLabel="Library view"
-                />
+                    {VIEW_OPTIONS.map((option) => (
+                      <Pressable
+                        key={option.value}
+                        accessibilityRole="button"
+                        accessibilityLabel={option.label}
+                        accessibilityState={{ selected: view === option.value }}
+                        onPress={() => setView(option.value)}
+                        className={cn(
+                          "size-10 items-center justify-center",
+                          view === option.value
+                            ? "bg-accent-soft"
+                            : "opacity-50 active:bg-surface-secondary active:opacity-100"
+                        )}
+                      >
+                        {option.icon}
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
               </View>
             </View>
 
@@ -994,48 +1006,51 @@ export default function MusicPage(): JSX.Element {
               </View>
             ) : null}
 
-            <Card onLayout={anchor("library-list")} className="mt-4 rounded-xl">
-              <CardHeader
-                title={libraryTitle}
-                description={
-                  listLoading
-                    ? "Loading tracks…"
-                    : pageCount > 1
-                      ? `${library.total.toLocaleString("en-IN")} tracks · page ${batch + 1} of ${pageCount}`
-                      : `${library.total.toLocaleString("en-IN")} tracks`
-                }
-                actions={
-                  fetching ? (
-                    <View className="flex-row items-center gap-2">
-                      <Spinner />
-                    </View>
-                  ) : null
-                }
-              />
+            <View onLayout={anchor("library-list")} className="mt-6">
+              <View className="mb-4 flex-row items-center justify-between gap-3">
+                <View className="min-w-0 flex-1">
+                  <Text
+                    accessibilityRole="header"
+                    className="text-xl font-semibold text-foreground"
+                  >
+                    {libraryTitle}
+                  </Text>
+                  <Text className="mt-1 text-xs text-muted">
+                    {listLoading
+                      ? "Loading tracks…"
+                      : `${library.total.toLocaleString("en-IN")} tracks${pageCount > 1 ? ` · Page ${batch + 1} of ${pageCount}` : ""}`}
+                  </Text>
+                </View>
+                {fetching ? <Spinner /> : null}
+              </View>
               {listLoading ? (
-                <CardContent>
+                <View>
                   {view === "list" ? (
-                    <View className="gap-1.5 p-2">
+                    <View className="gap-2">
                       {Array.from({ length: 12 }).map((_, tileIndex) => (
-                        <Skeleton key={tileIndex} className="h-16 rounded-xl" />
+                        <Skeleton key={tileIndex} className="h-16 rounded-none" />
                       ))}
                     </View>
                   ) : (
                     <View className="flex-row flex-wrap p-1.5">
                       {Array.from({ length: view === "large" ? 6 : 12 }).map((_, tileIndex) => (
-                        <View key={tileIndex} className="gap-2.5 px-1.5 pb-3" style={{ width: `${100 / GRID_COLS[view]}%` }}>
-                          <Skeleton className="aspect-square w-full rounded-xl" />
+                        <View
+                          key={tileIndex}
+                          className="gap-2.5 px-1.5 pb-3"
+                          style={{ width: `${100 / GRID_COLS[view]}%` }}
+                        >
+                          <Skeleton className="aspect-square w-full rounded-none" />
                           <Skeleton className="h-3.5 w-3/4" />
                           <Skeleton className="h-3 w-1/2" />
                         </View>
                       ))}
                     </View>
                   )}
-                </CardContent>
+                </View>
               ) : songs.length ? (
-                <CardContent>
+                <View>
                   {view === "list" ? (
-                    <View className="gap-1 p-2">
+                    <View className="gap-1">
                       {songs.map((song, songIndex) => {
                         const isActive = song.id === activeId;
                         return (
@@ -1043,16 +1058,22 @@ export default function MusicPage(): JSX.Element {
                             <Pressable
                               onPress={() => playFromPage(songIndex)}
                               accessibilityLabel={`Play ${song.title} by ${song.artist}`}
+                              accessibilityState={{ busy: isActive && trackLoading }}
                               className={cn(
-                                "min-h-[68px] flex-row items-center gap-3 rounded-lg py-2 ps-2 pe-[104px]",
+                                "min-h-[72px] flex-row items-center gap-3 py-3 ps-1 pe-[104px] active:opacity-70",
                                 isActive && "bg-accent-soft"
                               )}
                             >
-                              <View className="relative size-12 flex-none overflow-hidden rounded-xl bg-surface-muted">
+                              <View className="relative size-12 flex-none overflow-hidden bg-surface-muted">
                                 {song.image ? (
                                   <Image
                                     source={{ uri: song.image }}
-                                    style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+                                    style={{
+                                      position: "absolute",
+                                      inset: 0,
+                                      width: "100%",
+                                      height: "100%",
+                                    }}
                                     contentFit="cover"
                                   />
                                 ) : (
@@ -1066,7 +1087,13 @@ export default function MusicPage(): JSX.Element {
                                     isActive ? "opacity-100" : "opacity-0"
                                   )}
                                 >
-                                  {isActive && playing ? (
+                                  {isActive && trackLoading ? (
+                                    <ActivityIndicator
+                                      size="small"
+                                      color="#fff"
+                                      accessibilityLabel={`Loading ${song.title}`}
+                                    />
+                                  ) : isActive && playing ? (
                                     renderWave("h-full w-full", "text-white")
                                   ) : (
                                     <Icon name="play" size={16} color="#fff" />
@@ -1084,18 +1111,10 @@ export default function MusicPage(): JSX.Element {
                                   {song.title}
                                 </Text>
                                 <Text className="truncate text-xs text-muted" numberOfLines={1}>
-                                  {song.artist}
+                                  {formatSeconds(song.duration)} · {song.artist}
                                   {song.album ? ` · ${song.album}` : ""}
                                 </Text>
                               </View>
-                              {isActive ? (
-                                <View className="h-6 w-24 flex-none">
-                                  {renderWave("h-full w-full", "text-brand")}
-                                </View>
-                              ) : null}
-                              <Text className="flex-none text-xs font-medium text-muted-foreground">
-                                {formatSeconds(song.duration)}
-                              </Text>
                             </Pressable>
 
                             <View className="absolute end-1.5 top-1/2 z-10 -translate-y-1/2 flex-row items-center">
@@ -1146,12 +1165,18 @@ export default function MusicPage(): JSX.Element {
                             <Pressable
                               onPress={() => playFromPage(songIndex)}
                               accessibilityLabel={`Play ${song.title} by ${song.artist}`}
-                              className="relative aspect-square w-full overflow-hidden rounded-lg bg-surface-muted shadow-field"
+                              accessibilityState={{ busy: isActive && trackLoading }}
+                              className="relative aspect-square w-full overflow-hidden bg-surface-muted active:opacity-70"
                             >
                               {src ? (
                                 <Image
                                   source={{ uri: src }}
-                                  style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+                                  style={{
+                                    position: "absolute",
+                                    inset: 0,
+                                    width: "100%",
+                                    height: "100%",
+                                  }}
                                   alt=""
                                   contentFit="cover"
                                   transition={150}
@@ -1167,10 +1192,20 @@ export default function MusicPage(): JSX.Element {
                                   isActive ? "opacity-100" : "opacity-0"
                                 )}
                               >
-                                {isActive && playing ? (
+                                {isActive && trackLoading ? (
+                                  <ActivityIndicator
+                                    size="large"
+                                    color="#fff"
+                                    accessibilityLabel={`Loading ${song.title}`}
+                                  />
+                                ) : isActive && playing ? (
                                   renderWave("h-2/3 w-2/3", "text-white")
                                 ) : (
-                                  <Icon name="play" size={view === "large" ? 22 : 18} color="#fff" />
+                                  <Icon
+                                    name="play"
+                                    size={view === "large" ? 22 : 18}
+                                    color="#fff"
+                                  />
                                 )}
                               </View>
                               {view === "large" ? (
@@ -1192,7 +1227,10 @@ export default function MusicPage(): JSX.Element {
                               >
                                 {song.title}
                               </Text>
-                              <Text className="mt-0.5 truncate text-xs text-muted" numberOfLines={1}>
+                              <Text
+                                className="mt-0.5 truncate text-xs text-muted"
+                                numberOfLines={1}
+                              >
                                 {song.artist}
                               </Text>
                             </View>
@@ -1201,11 +1239,13 @@ export default function MusicPage(): JSX.Element {
                       })}
                     </View>
                   )}
-                </CardContent>
+                </View>
               ) : (
-                <CardContent className="p-4">
+                <View className="py-4">
                   <EmptyState
-                    icon={<Icon name={activeVibes.length ? "sliders" : "search"} className="size-5" />}
+                    icon={
+                      <Icon name={activeVibes.length ? "sliders" : "search"} className="size-5" />
+                    }
                     title={
                       activeVibes.length
                         ? "No songs matched the selected filters"
@@ -1217,9 +1257,9 @@ export default function MusicPage(): JSX.Element {
                         : "Try a shorter phrase, an artist name, or one of the regions above."
                     }
                   />
-                </CardContent>
+                </View>
               )}
-            </Card>
+            </View>
 
             {/* Numbered pages: 1 · 2 · 3 … next — each next lists ten more. */}
             {pageCount > 1 && songs.length ? (
@@ -1235,29 +1275,66 @@ export default function MusicPage(): JSX.Element {
 
             {/* Label line — the quiet footer, Zomato style. */}
             <View className="mt-16 px-2 pb-4 items-center">
-              <Text className="text-center text-[28px] font-black leading-[1.05] tracking-tighter text-foreground/10">
-                Crafted with{" "}
-                <Text className="text-danger">♥</Text>{" "}
-                <Text className="">in Kochi, India</Text>
+              <Text
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+                accessibilityLabel="Crafted with love in Kochi, India"
+                className="w-full text-center text-[18px] font-black leading-6 tracking-tight text-foreground/10"
+              >
+                Crafted with <Text className="text-danger">♥</Text> in Kochi, India
               </Text>
             </View>
           </View>
-        ) : homeTab === "playlists" ? (
-          <PlaylistsView query={playlistQuery} />
-        ) : homeTab === "liked" ? (
-          <LikedView />
-        ) : homeTab === "downloads" ? (
-          <DownloadsView />
-        ) : homeTab === "offline" ? (
-          <OfflineView onImport={() => setImportOpen(true)} />
-        ) : null}
-      </Animated.View>
-
+        </ScrollView>
+      </HomeTabPanel>
+      {!isGuest ? (
+        <>
+          {!personal ? (
+            <>
+              <HomeTabPanel active={homeTab === "customize"}>
+                <CustomizationConsole key={user?.id} active={homeTab === "customize"} />
+              </HomeTabPanel>
+              <HomeTabPanel active={homeTab === "payments"}>
+                <PaymentsHistory key={user?.id} />
+              </HomeTabPanel>
+            </>
+          ) : null}
+          <HomeTabPanel active={homeTab === "playlists"}>
+            <ScrollView
+              contentContainerStyle={panelStyle}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <PlaylistsView query={playlistQuery} />
+            </ScrollView>
+          </HomeTabPanel>
+          <HomeTabPanel active={homeTab === "liked"}>
+            <LikedView paddingBottom={panelStyle.paddingBottom} />
+          </HomeTabPanel>
+          <HomeTabPanel active={homeTab === "downloads"}>
+            <ScrollView
+              contentContainerStyle={panelStyle}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <DownloadsView />
+            </ScrollView>
+          </HomeTabPanel>
+          <HomeTabPanel active={homeTab === "offline"}>
+            <ScrollView
+              contentContainerStyle={panelStyle}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <OfflineView onImport={() => setImportOpen(true)} />
+            </ScrollView>
+          </HomeTabPanel>
+        </>
+      ) : null}
       <ImportSongsModal open={importOpen} onClose={() => setImportOpen(false)} />
       <InstallModal />
-      {/* The web renders the side preview here; on mobile it is the
-          (app)/now-playing modal route, opened by the sticky player bar. */}
-    </ScrollView>
+    </View>
   );
 }
 
@@ -1271,10 +1348,18 @@ function FilterRow({
 }): JSX.Element {
   return (
     <View className="flex-row items-center gap-3 border-t border-separator px-3.5 py-2.5">
-      <Text className="w-16 flex-none text-[10px] font-bold uppercase tracking-[1.2px] text-muted">
+      <Text
+        numberOfLines={1}
+        className="w-20 flex-none text-[10px] font-bold uppercase tracking-[1.2px] text-muted"
+      >
         {label}
       </Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6 }}>
+      <ScrollView
+        horizontal
+        className="min-w-0 flex-1"
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+      >
         {chips.map((chip) => (
           <Pressable
             key={chip.key}
@@ -1283,9 +1368,7 @@ function FilterRow({
             accessibilityState={{ checked: chip.checked }}
             className={cn(
               "h-9 flex-none flex-row items-center gap-1.5 rounded-full border px-3.5",
-              chip.checked
-                ? "border-transparent bg-accent"
-                : "border-separator bg-transparent"
+              chip.checked ? "border-transparent bg-accent" : "border-separator bg-transparent"
             )}
           >
             {chip.checked ? (
@@ -1294,7 +1377,10 @@ function FilterRow({
               </View>
             ) : null}
             <Text
-              className={cn("text-xs font-semibold", chip.checked ? "text-accent-foreground" : "text-muted")}
+              className={cn(
+                "text-xs font-semibold",
+                chip.checked ? "text-accent-foreground" : "text-muted"
+              )}
             >
               {chip.label}
             </Text>

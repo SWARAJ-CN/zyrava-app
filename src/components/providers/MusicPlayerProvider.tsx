@@ -9,6 +9,8 @@ import {
   type ReactNode,
 } from "react";
 import { AppState, type AppStateStatus } from "react-native";
+import type { KaraokePreparationProgress } from "@/lib/karaoke-worker";
+import { useDeviceVolume } from "@/hooks/useDeviceVolume";
 import type {
   AudioContext,
   AudioTagHandle,
@@ -21,7 +23,12 @@ import type {
   WaveShaperNode,
   AnalyserNode as RnAnalyserNode,
 } from "react-native-audio-api";
+import { bindPlaybackSource, createEqualizerChain } from "@/lib/playback-graph";
+import { createKaraokeStage } from "@/lib/karaoke";
+import { getInstrumental, pickInstrumental } from "@/lib/instrumentals";
 import { getAudioEngine } from "@/lib/audio-engine";
+import { createEqualizerBridge } from "@/lib/go-equalizer";
+import { GoEqualizerHost } from "./GoEqualizerHost";
 import {
   configureGoAudioMode,
   createGoAudioTransport,
@@ -30,6 +37,7 @@ import {
 } from "@/lib/go-audio";
 import type { Song } from "@/lib/saavn";
 import { searchSongs } from "@/lib/saavn";
+import { loadLyrics } from "@/lib/lyrics-cache";
 import { playbackKind, buildRadioFor, type FetchPool } from "@/lib/taste";
 import { useTaste } from "@/components/providers/TasteProvider";
 import { useOffline } from "@/components/providers/OfflineProvider";
@@ -42,16 +50,15 @@ import { getItem, setItem } from "@/lib/store";
  * The engine loads through the lazy shim (see audio-engine.ts): in a binary
  * without react-native-audio-api — Expo Go — `engine` is simply null. The
  * app still boots, browses, chats and reads lyrics. Playback itself then
- * runs on the expo-audio transport (lib/go-audio.ts), and only the
- * studio-grade graph — EQ, FX rack, spatial, analyser, pads — degrades to
- * clearly-labelled inactive controls instead of a crash wall.
+ * uses a foreground WebView graph for EQ, Space and live vocal reduction,
+ * with expo-audio as fallback. Studio FX, native metering and pads need
+ * the installed native engine.
  */
 const engine = getAudioEngine();
 const AudioTagComponent = engine?.Audio ?? null;
 const notify = engine?.PlaybackNotificationManager ?? null;
 /** True when playback must ride the Expo Go transport (no native engine). */
 const goBackend = engine === null;
-
 /* ------------------------------------------------------------------ *
  * Native port of the web MusicPlayerProvider.
  *
@@ -74,16 +81,15 @@ const goBackend = engine === null;
 /* ── DJ rig — repeat modes, the effect-rack wet levels and the FX names. ── */
 export type RepeatMode = "off" | "all" | "one";
 
-/** Every launch starts clean: master at 1% (raised only by the listener),
- *  Flat EQ, space off. */
-export const DEFAULT_VOLUME = 0.01;
+/** Full app gain on launch; native device volume still follows the phone. */
+export const DEFAULT_VOLUME = 1;
 
 /** What a visitor who has not signed in gets to hear: one page of tracks. */
 export const GUEST_PLAY_LIMIT = 10;
 
-/** Slider → loudness curve (fifth-power perceived-loudness mapping). */
+/** A percentage maps directly to gain; 1% must not unexpectedly output 40%. */
 export function appliedVolume(slider: number): number {
-  return slider <= 0 ? 0 : Math.pow(slider, 0.2);
+  return Number.isFinite(slider) ? Math.max(0, Math.min(1, slider)) : 0;
 }
 
 function masterLevel(volume: number, muted: boolean, preampDb: number): number {
@@ -218,7 +224,7 @@ export const SPATIAL_MODES: { value: SpatialMode; label: string; hint: string }[
   { value: "mono", label: "Mono", hint: "Both channels summed" },
   { value: "wide", label: "Wide", hint: "Extra-wide stereo field" },
   { value: "8d", label: "8D", hint: "Slow orbit around your head" },
-  { value: "3d", label: "3D", hint: "HRTF room feel" },
+  { value: "3d", label: "3D", hint: "Moving 3D placement (equal-power)" },
   { value: "surround", label: "Surround", hint: "Widened stereo field" },
   { value: "stack", label: "PA stack", hint: "Mono sub, stereo tops" },
   { value: "pan", label: "Auto pan", hint: "Fast ping-pong pan" },
@@ -302,7 +308,10 @@ class ApproxCompressor {
       const soft = mag > thr * (1 - kneeWidth) ? thr * (1 - kneeWidth) : mag;
       const overshoot = Math.max(0, mag - thr);
       const shaped = thr + overshoot / ratio.value;
-      const kneeBlend = mag > thr * (1 - kneeWidth) && mag < thr ? (mag - thr * (1 - kneeWidth)) / (thr * kneeWidth || 1) : 1;
+      const kneeBlend =
+        mag > thr * (1 - kneeWidth) && mag < thr
+          ? (mag - thr * (1 - kneeWidth)) / (thr * kneeWidth || 1)
+          : 1;
       curve[i] = Math.sign(x) * Math.min(1, shaped * (kneeBlend || 1) || soft);
     }
     this.shaper.curve = curve;
@@ -326,10 +335,7 @@ function identityCurve(): Float32Array {
   return identityCurveCache;
 }
 
-function createCompressorStage(
-  context: AudioContext,
-  withShaper: boolean
-): ApproxCompressor {
+function createCompressorStage(context: AudioContext, withShaper: boolean): ApproxCompressor {
   const node = context.createGain();
   if (!withShaper) return new ApproxCompressor(context, node, null);
   const shaper = context.createWaveShaper();
@@ -387,11 +393,23 @@ interface MusicPlayerValue {
   index: number;
   current: Song | null;
   playing: boolean;
+  loading: boolean;
   progress: number;
   duration: number;
   volume: number;
+  volumeIsDevice: boolean;
   muted: boolean;
+  karaokeOn: boolean;
+  instrumentalPlaying: boolean;
+  karaokeSelecting: boolean;
+  instrumentalName: string | null;
+  chooseInstrumental: () => Promise<void>;
+  karaokeAvailable: boolean;
+  karaokePreparing: boolean;
+  karaokeError: string | null;
+  setKaraoke: (enabled: boolean) => void;
   playerError: string | null;
+  processingError: string | null;
   visualizerReady: boolean;
   /** Spotify-style "Now playing" preview (a full-screen route on mobile). */
   nowPlayingOpen: boolean;
@@ -433,6 +451,8 @@ interface MusicPlayerValue {
   /** Live graph facts for the dashboard. */
   getGraphInfo: () => {
     webAudio: boolean;
+    equalizer: boolean;
+    spatial: boolean;
     sampleRate: number | null;
     channels: number | null;
   };
@@ -482,7 +502,12 @@ interface MusicPlayerValue {
   setMobileNavOpen: (open: boolean) => void;
 }
 
-const MusicPlayerContext = createContext<MusicPlayerValue | null>(null);
+type PlaybackClock = Pick<MusicPlayerValue, "progress" | "duration" | "listenedSeconds">;
+type PlayerControls = Omit<MusicPlayerValue, keyof PlaybackClock | "mobileNavOpen">;
+const MusicPlayerContext = createContext<PlayerControls | null>(null);
+const PlaybackClockContext = createContext<PlaybackClock | null>(null);
+const MobileNavContext = createContext<boolean | undefined>(undefined);
+const KaraokeProgressContext = createContext<KaraokePreparationProgress | null>(null);
 
 /*
  * Native engine context — one per provider lifetime. The web graph was
@@ -515,11 +540,7 @@ function releaseContext(): void {
  * Renders inside the `<Audio>` tag so the provider can read the native
  * element's `duration`/`ready` (the tag exposes them through context).
  */
-function AudioMetaBridge({
-  onMeta,
-}: {
-  onMeta: (duration: number, ready: boolean) => void;
-}): null {
+function AudioMetaBridge({ onMeta }: { onMeta: (duration: number, ready: boolean) => void }): null {
   // Only ever mounted inside <Audio>, which only exists when the engine does.
   const tag = engine?.useAudioTagContext();
   useEffect(() => {
@@ -543,12 +564,35 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const [queueLabel, setQueueLabel] = useState("");
   const [index, setIndex] = useState(-1);
   const [playing, setPlaying] = useState(false);
+  const [loadedTrackId, setLoadedTrackId] = useState<string | null>(null);
+  const [buffering, setBuffering] = useState(false);
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolumeState] = useState(DEFAULT_VOLUME);
+  const [appVolume, setVolumeState] = useState(DEFAULT_VOLUME);
+  const { volume: deviceVolume, setVolume: setDeviceVolume } = useDeviceVolume();
+  const volumeIsDevice = deviceVolume !== null;
+  const volume = deviceVolume ?? appVolume;
+  // System volume is applied by the OS: never attenuate it a second time in our graph.
+  const localVolume = volumeIsDevice ? 1 : appVolume;
   const [muted, setMutedState] = useState(false);
+  const [karaokeOn, setKaraokeOn] = useState(false);
+  const [karaokeUsesFile, setKaraokeUsesFile] = useState(false);
+  const karaokeStageRef = useRef<ReturnType<typeof createKaraokeStage> | null>(null);
+  const liveKaraokeRef = useRef(false);
+  const [karaokeError, setKaraokeError] = useState<string | null>(null);
+  const [instrumentalRevision, setInstrumentalRevision] = useState(0);
+  const [karaokeSelecting, setKaraokeSelecting] = useState(false);
+  const selectingRef = useRef(false);
+  const aliveRef = useRef(true);
+  const resumeSourceRef = useRef<{ generation: number; position: number } | null>(null);
+  const lastSourceTrackRef = useRef<string | null>(null);
   const [playerError, setPlayerError] = useState<string | null>(null);
+  const [processingError, setProcessingError] = useState<string | null>(null);
 
+  const [goEqReady, setGoEqReady] = useState(false);
+  const [goEqUnavailable, setGoEqUnavailable] = useState(false);
+  const [goEqFailedGeneration, setGoEqFailedGeneration] = useState<number | null>(null);
+  const [goEqualizer] = useState(createEqualizerBridge);
   const [eqPreset, setEqPreset] = useState("Flat");
   const [eqGains, setEqGains] = useState<number[]>([...EQ_PRESETS[0].gains]);
   /** The user's own ten-band curve, saved separately from the factory presets. */
@@ -566,7 +610,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const [balance, setBalanceState] = useState(0);
   const [rate, setRateState] = useState(1);
   const preampDbRef = useRef(preampDb);
-  const volumeRef = useRef(volume);
+  const volumeRef = useRef(localVolume);
   const mutedRef = useRef(muted);
   const balanceRef = useRef(balance);
   const rateRef = useRef(rate);
@@ -627,17 +671,28 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   /** The high-pass node for the low-cut stage in the graph. */
   const loCutNodeRef = useRef<BiquadFilterNode | null>(null);
 
-  /* ── Native media element ──
-   * The `<Audio>` tag is the singleton; commands go through its handle, the
-   * source flows through React state (a prop swap reloads it like `src=`). */
+  /* One native media element at a time. Each load gets a fresh keyed instance
+   * so its pending requests cannot overwrite the next track's source. */
   const audioRef = useRef<AudioTagHandle | null>(null);
   const [source, setSource] = useState<string | null>(null);
+  const goPlaybackSource = source;
+
+  const karaokePreparing = false;
+  const goLoadRef = useRef(-1);
+  const [sourceGeneration, setSourceGeneration] = useState(0);
+  // Flat is the same effects transport with zero gains, never another player.
+  const goEqActive = goBackend && !goEqUnavailable && goEqFailedGeneration !== sourceGeneration;
+  const goEffectsSupported = goEqReady && goEqActive;
+  const goEqActiveRef = useRef(goEqActive);
+  const sourceGenerationRef = useRef(0);
   const sourceRefForState = useRef<string | null>(null);
   /** Element position/ended mirrors — the native handle has no live getters. */
   const positionRef = useRef(0);
   const endedRef = useRef(false);
   const pausedRef = useRef(true);
   const readyRef = useRef(false);
+  // Native playback waits for onLoad rather than starting a second load during preload.
+  const playPendingRef = useRef(false);
   const durationRef = useRef(0);
   const lastProgressCommitRef = useRef(0);
 
@@ -663,6 +718,23 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   /** Stops LFOs / disconnects the current spatial chain. */
   const spatialCleanupRef = useRef<() => void>(() => {});
   const spatialModeRef = useRef<SpatialMode>(spatialMode);
+  const handleGoEqAvailable = useCallback((ready: boolean) => {
+    setGoEqReady(ready);
+    if (!ready) {
+      setGoEqUnavailable(true);
+      if (liveKaraokeRef.current) {
+        setKaraokeOn(false);
+        setKaraokeError("Vocal reduction stopped because the effects player is unavailable.");
+      }
+      setEqGains([...EQ_PRESETS[0].gains]);
+      setEqPreset("Flat");
+      setSpatialModeState("off");
+      spatialModeRef.current = "off";
+      setProcessingError(
+        "The effects player is unavailable. Original playback is continuing without EQ or Space."
+      );
+    }
+  }, []);
   /** The element's tap into the audio graph (created per mounted element). */
   const mediaSourceRef = useRef<RnAudioNode | null>(null);
   /** The `<Audio>` handle the tap was created from — element identity, so a
@@ -713,6 +785,15 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   }, [fx, sweep, subDb, compAmt, limiterOn, loudnessOn]);
 
   const current = queue[index] ?? null;
+  const instrumental = useMemo(
+    () => (current ? getInstrumental(current.id) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Re-read saved metadata after the picker replaces a file.
+    [current, instrumentalRevision]
+  );
+  const instrumentalSource = karaokeOn && karaokeUsesFile ? (instrumental?.uri ?? null) : null;
+  const liveKaraoke = karaokeOn && !karaokeUsesFile;
+
+  const loading = Boolean(current && !playerError && (loadedTrackId !== current.id || buffering));
 
   useEffect(() => {
     currentRef.current = current;
@@ -734,6 +815,29 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     spatialCleanupRef.current();
     spatialCleanupRef.current = () => {};
     input.disconnect();
+    setProcessingError(null);
+    const allocated: RnAudioNode[] = [];
+    const oscillators: ReturnType<AudioContext["createOscillator"]>[] = [];
+    const track = <T extends RnAudioNode>(node: T): T => {
+      allocated.push(node);
+      return node;
+    };
+    const dispose = () => {
+      for (const oscillator of oscillators) {
+        try {
+          oscillator.stop();
+        } catch {
+          /* already stopped */
+        }
+      }
+      for (const node of allocated) {
+        try {
+          node.disconnect();
+        } catch {
+          /* already disposed */
+        }
+      }
+    };
 
     const mode = spatialModeRef.current;
     if (mode === "off" || mode === "stereo") {
@@ -743,10 +847,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
     try {
       if (mode === "mono") {
-        const splitter = ctx.createChannelSplitter(2);
-        const sum = ctx.createGain();
-        const halfL = ctx.createGain();
-        const halfR = ctx.createGain();
+        const splitter = track(ctx.createChannelSplitter(2));
+        const sum = track(ctx.createGain());
+        const halfL = track(ctx.createGain());
+        const halfR = track(ctx.createGain());
         halfL.gain.value = 0.5;
         halfR.gain.value = 0.5;
         splitter.connect(halfL, 0);
@@ -755,23 +859,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         halfR.connect(sum);
         input.connect(splitter);
         sum.connect(output);
-        spatialCleanupRef.current = () => {
-          try {
-            splitter.disconnect();
-            halfL.disconnect();
-            halfR.disconnect();
-            sum.disconnect();
-          } catch {
-            /* already disconnected */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       if (mode === "8d") {
-        const panner = ctx.createStereoPanner();
-        const lfo = ctx.createOscillator();
-        const depth = ctx.createGain();
+        const panner = track(ctx.createStereoPanner());
+        const lfo = track(ctx.createOscillator());
+        const depth = track(ctx.createGain());
         lfo.type = "sine";
         lfo.frequency.value = 0.08;
         depth.gain.value = 0.95;
@@ -779,22 +874,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         depth.connect(panner.pan);
         input.connect(panner);
         panner.connect(output);
+        oscillators.push(lfo);
         lfo.start();
-        spatialCleanupRef.current = () => {
-          try {
-            lfo.stop();
-            lfo.disconnect();
-            depth.disconnect();
-            panner.disconnect();
-          } catch {
-            /* already stopped */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       if (mode === "3d") {
-        const panner = ctx.createPanner();
+        const panner = track(ctx.createPanner());
         /* The native engine's panner is equalpower for now (HRTF is on the
            library roadmap); the binaural drift below carries the 3D feel. */
         panner.distanceModel = "inverse";
@@ -802,8 +889,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         panner.rolloffFactor = 0.4;
         panner.positionZ.value = -0.9;
         panner.positionY.value = -0.1;
-        const lfo = ctx.createOscillator();
-        const depth = ctx.createGain();
+        const lfo = track(ctx.createOscillator());
+        const depth = track(ctx.createGain());
         lfo.type = "sine";
         lfo.frequency.value = 0.05;
         depth.gain.value = 1.8;
@@ -811,29 +898,21 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         depth.connect(panner.positionX);
         input.connect(panner);
         panner.connect(output);
+        oscillators.push(lfo);
         lfo.start();
-        spatialCleanupRef.current = () => {
-          try {
-            lfo.stop();
-            lfo.disconnect();
-            depth.disconnect();
-            panner.disconnect();
-          } catch {
-            /* already stopped */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       if (mode === "stack") {
-        const splitter = ctx.createChannelSplitter(2);
-        const merger = ctx.createChannelMerger(2);
-        const subL = ctx.createGain();
-        const subR = ctx.createGain();
-        const subSum = ctx.createGain();
-        const subLow = ctx.createBiquadFilter();
-        const topL = ctx.createGain();
-        const topR = ctx.createGain();
+        const splitter = track(ctx.createChannelSplitter(2));
+        const merger = track(ctx.createChannelMerger(2));
+        const subL = track(ctx.createGain());
+        const subR = track(ctx.createGain());
+        const subSum = track(ctx.createGain());
+        const subLow = track(ctx.createBiquadFilter());
+        const topL = track(ctx.createGain());
+        const topR = track(ctx.createGain());
         subL.gain.value = 0.5;
         subR.gain.value = 0.5;
         subLow.type = "lowpass";
@@ -854,30 +933,17 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         topR.connect(merger, 0, 1);
         input.connect(splitter);
         merger.connect(output);
-        spatialCleanupRef.current = () => {
-          try {
-            splitter.disconnect();
-            merger.disconnect();
-            subL.disconnect();
-            subR.disconnect();
-            subSum.disconnect();
-            subLow.disconnect();
-            topL.disconnect();
-            topR.disconnect();
-          } catch {
-            /* already disconnected */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       if (mode === "wide") {
-        const splitter = ctx.createChannelSplitter(2);
-        const merger = ctx.createChannelMerger(2);
-        const straightL = ctx.createGain();
-        const straightR = ctx.createGain();
-        const crossL = ctx.createGain();
-        const crossR = ctx.createGain();
+        const splitter = track(ctx.createChannelSplitter(2));
+        const merger = track(ctx.createChannelMerger(2));
+        const straightL = track(ctx.createGain());
+        const straightR = track(ctx.createGain());
+        const crossL = track(ctx.createGain());
+        const crossR = track(ctx.createGain());
         straightL.gain.value = 0.85;
         straightR.gain.value = 0.85;
         crossL.gain.value = -0.45;
@@ -892,25 +958,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         straightR.connect(merger, 0, 1);
         input.connect(splitter);
         merger.connect(output);
-        spatialCleanupRef.current = () => {
-          try {
-            splitter.disconnect();
-            merger.disconnect();
-            straightL.disconnect();
-            straightR.disconnect();
-            crossL.disconnect();
-            crossR.disconnect();
-          } catch {
-            /* already disconnected */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       if (mode === "pan") {
-        const panner = ctx.createStereoPanner();
-        const lfo = ctx.createOscillator();
-        const depth = ctx.createGain();
+        const panner = track(ctx.createStereoPanner());
+        const lfo = track(ctx.createOscillator());
+        const depth = track(ctx.createGain());
         lfo.type = "sine";
         lfo.frequency.value = 0.45;
         depth.gain.value = 0.7;
@@ -918,52 +973,37 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         depth.connect(panner.pan);
         input.connect(panner);
         panner.connect(output);
+        oscillators.push(lfo);
         lfo.start();
-        spatialCleanupRef.current = () => {
-          try {
-            lfo.stop();
-            lfo.disconnect();
-            depth.disconnect();
-            panner.disconnect();
-          } catch {
-            /* already stopped */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       if (mode === "telephone") {
-        const band = ctx.createBiquadFilter();
+        const band = track(ctx.createBiquadFilter());
         band.type = "bandpass";
         band.frequency.value = 1400;
         band.Q.value = 1.1;
-        const level = ctx.createGain();
+        const level = track(ctx.createGain());
         level.gain.value = 1.6;
         input.connect(band);
         band.connect(level);
         level.connect(output);
-        spatialCleanupRef.current = () => {
-          try {
-            band.disconnect();
-            level.disconnect();
-          } catch {
-            /* already disconnected */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       if (mode === "echo") {
-        const dry = ctx.createGain();
+        const dry = track(ctx.createGain());
         dry.gain.value = 0.85;
-        const delay = ctx.createDelay(1.2);
+        const delay = track(ctx.createDelay(1.2));
         delay.delayTime.value = 0.32;
-        const damp = ctx.createBiquadFilter();
+        const damp = track(ctx.createBiquadFilter());
         damp.type = "lowpass";
         damp.frequency.value = 3200;
-        const feedback = ctx.createGain();
+        const feedback = track(ctx.createGain());
         feedback.gain.value = 0.38;
-        const wet = ctx.createGain();
+        const wet = track(ctx.createGain());
         wet.gain.value = 0.5;
         input.connect(dry);
         dry.connect(output);
@@ -973,29 +1013,19 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         feedback.connect(delay);
         damp.connect(wet);
         wet.connect(output);
-        spatialCleanupRef.current = () => {
-          try {
-            dry.disconnect();
-            delay.disconnect();
-            damp.disconnect();
-            feedback.disconnect();
-            wet.disconnect();
-          } catch {
-            /* already disconnected */
-          }
-        };
+        spatialCleanupRef.current = dispose;
         return;
       }
 
       // Surround: cross-bled Haas widener.
-      const splitter = ctx.createChannelSplitter(2);
-      const merger = ctx.createChannelMerger(2);
-      const ghostToRight = ctx.createDelay(0.05);
-      const ghostToLeft = ctx.createDelay(0.05);
+      const splitter = track(ctx.createChannelSplitter(2));
+      const merger = track(ctx.createChannelMerger(2));
+      const ghostToRight = track(ctx.createDelay(0.05));
+      const ghostToLeft = track(ctx.createDelay(0.05));
       ghostToRight.delayTime.value = 0.018;
       ghostToLeft.delayTime.value = 0.018;
-      const bleedRight = ctx.createGain();
-      const bleedLeft = ctx.createGain();
+      const bleedRight = track(ctx.createGain());
+      const bleedLeft = track(ctx.createGain());
       bleedRight.gain.value = 0.32;
       bleedLeft.gain.value = 0.32;
 
@@ -1009,21 +1039,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       ghostToLeft.connect(bleedLeft);
       bleedLeft.connect(merger, 0, 0);
       merger.connect(output);
-      spatialCleanupRef.current = () => {
-        try {
-          splitter.disconnect();
-          ghostToRight.disconnect();
-          ghostToLeft.disconnect();
-          bleedRight.disconnect();
-          bleedLeft.disconnect();
-          merger.disconnect();
-        } catch {
-          /* already disconnected */
-        }
-      };
+      spatialCleanupRef.current = dispose;
     } catch {
-      // Node types unavailable — stay silent-equivalent (direct).
+      dispose();
+      input.disconnect();
       input.connect(output);
+      spatialModeRef.current = "off";
+      setSpatialModeState("off");
+      setProcessingError("Space could not start. Playback is continuing with Space off.");
     }
   }, [context]);
 
@@ -1105,21 +1128,16 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     applyFX();
   }, [applyFX]);
 
-  /** Picks the head's route — light path until the rack earns its place. */
+  /** Keeps the EQ route connected and builds optional spatial/DJ effects on demand. */
   const applyRouting = useCallback(() => {
     const ctx = context;
     const head = loCutNodeRef.current;
     if (!ctx || !head) return;
-    const eqOn = eqGainsRef.current.some((gain) => gain !== 0);
-    const spaceOn =
-      spatialModeRef.current !== "off" && spatialModeRef.current !== "stereo";
-    if ((eqOn || spaceOn || djEngagedRef.current) && !rackReadyRef.current) {
+    if (djEngagedRef.current && !rackReadyRef.current) {
       ensureRackRef.current();
     }
     const target: RnAudioNode =
-      filtersRef.current.length > 0
-        ? filtersRef.current[0]
-        : djOutRef.current ?? ctx.destination;
+      filtersRef.current.length > 0 ? filtersRef.current[0] : (djOutRef.current ?? ctx.destination);
     if (routeTargetRef.current === target) return;
     if (routeTargetRef.current) {
       try {
@@ -1136,118 +1154,200 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     }
   }, [context]);
 
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+    };
+  }, []);
+
+  const chooseInstrumental = useCallback(async () => {
+    const track = currentRef.current;
+    if (!track || selectingRef.current) return;
+    selectingRef.current = true;
+    setKaraokeSelecting(true);
+    setKaraokeOn(false);
+    setKaraokeError(null);
+    try {
+      const file = await pickInstrumental(track.id);
+      if (!aliveRef.current) return;
+      setInstrumentalRevision((revision) => revision + 1);
+      if (currentRef.current?.id === track.id && (file || karaokeOn)) {
+        if (file) setKaraokeUsesFile(true);
+        setKaraokeOn(true);
+      }
+    } catch (error) {
+      if (aliveRef.current && currentRef.current?.id === track.id)
+        setKaraokeError(
+          error instanceof Error ? error.message : "Could not open the instrumental."
+        );
+    } finally {
+      selectingRef.current = false;
+      if (aliveRef.current) setKaraokeSelecting(false);
+    }
+  }, [karaokeOn]);
+
+  const setKaraoke = useCallback(
+    (enabled: boolean) => {
+      if (!enabled) {
+        setKaraokeOn(false);
+        setKaraokeError(null);
+        return;
+      }
+      const track = currentRef.current;
+      if (!track) return;
+      if (!context && !goEffectsSupported) {
+        setKaraokeError("Vocal reduction is unavailable on the current player.");
+        return;
+      }
+      setKaraokeUsesFile(false);
+      setKaraokeError(null);
+      setKaraokeOn(true);
+    },
+    [context, goEffectsSupported]
+  );
+
   /**
    * Wires the graph once — light form first (source → pre-amp → balance →
-   * low-cut → djOut → master → speakers, with the analyser + stereo meter
+   * low-cut → EQ → trim → djOut → master → speakers, with analyser + stereo meter
    * taps off the way they sit on the web). The heavy rack splices in later.
    */
-  const ensureGraph = useCallback((): RnAnalyserNode | null => {
-    const handle = audioRef.current;
-    const ctx = context;
-    if (!ctx) return null;
-    if (!handle) return null;
-    // Already wired to this very element — nothing to do.
-    if (analyserRef.current && elementRef.current === handle) return analyserRef.current;
-    // The element remounted (source cleared between tracks): take the old
-    // tap out of the graph before the new handle claims its slot.
-    if (mediaSourceRef.current && elementRef.current !== handle) {
-      try {
-        mediaSourceRef.current.disconnect();
-      } catch {
-        /* already detached */
+  const ensureGraph = useCallback(
+    (newSource = false): RnAnalyserNode | null => {
+      const handle = audioRef.current;
+      const ctx = context;
+      if (!ctx) return null;
+      if (!handle) return null;
+      // Audio's handle survives track changes, but its native file source does not.
+      // Every onLoad must claim that new source and route it through the saved rack.
+      if (analyserRef.current && preampNodeRef.current) {
+        if (!newSource && elementRef.current === handle) return analyserRef.current;
+        try {
+          mediaSourceRef.current = bindPlaybackSource(
+            ctx,
+            handle,
+            mediaSourceRef.current,
+            preampNodeRef.current,
+            analyserRef.current
+          );
+          elementRef.current = handle;
+          handle.setVolume(1);
+          handle.setMuted(false);
+          return analyserRef.current;
+        } catch {
+          return null;
+        }
       }
-      mediaSourceRef.current = null;
-      analyserRef.current = null;
-    }
-    try {
-      const mediaSource = ctx.createMediaElementSource(handle);
-      mediaSourceRef.current = mediaSource;
-      elementRef.current = handle;
-      const sourceNode: RnAudioNode = mediaSource;
-      const preamp = ctx.createGain();
-      preamp.gain.value = Math.pow(10, preampDbRef.current / 20);
-      const panNode = ctx.createStereoPanner();
-      panNode.pan.value = balanceRef.current;
-      const loCutNode = ctx.createBiquadFilter();
-      loCutNode.type = "highpass";
-      loCutNode.frequency.value = loCutRef.current ? 40 : 4;
-      sourceNode.connect(preamp);
-      preamp.connect(panNode);
-      panNode.connect(loCutNode);
+      try {
+        const mediaSource = ctx.createMediaElementSource(handle);
+        mediaSourceRef.current = mediaSource;
+        elementRef.current = handle;
+        const sourceNode: RnAudioNode = mediaSource;
+        const preamp = ctx.createGain();
+        preamp.gain.value = Math.pow(10, preampDbRef.current / 20);
+        const panNode = ctx.createStereoPanner();
+        panNode.pan.value = balanceRef.current;
+        const loCutNode = ctx.createBiquadFilter();
+        loCutNode.type = "highpass";
+        loCutNode.frequency.value = loCutRef.current ? 40 : 4;
+        sourceNode.connect(preamp);
+        preamp.connect(panNode);
+        panNode.connect(loCutNode);
 
-      const djOut = ctx.createGain();
-      djOut.gain.value = 1;
-      loCutNode.connect(djOut);
-      const masterGain = ctx.createGain();
-      masterGain.gain.value = masterLevel(
-        volumeRef.current,
-        mutedRef.current,
-        preampDbRef.current
-      );
-      djOut.connect(masterGain);
-      masterGain.connect(ctx.destination);
-      masterGainRef.current = masterGain;
-      // The master node owns the level from here.
-      handle.setVolume(1);
-      handle.setMuted(false);
+        const djOut = ctx.createGain();
+        djOut.gain.value = 1;
+        // EQ is small and always available; it must not depend on constructing
+        // convolution, oscillators, or any other optional studio effect.
+        const { filters, trim } = createEqualizerChain(
+          ctx,
+          EQ_BANDS.map((band) => band.frequency),
+          eqGainsRef.current,
+          eqMakeupGain(eqGainsRef.current)
+        );
+        loCutNode.connect(filters[0]);
+        const spaceIn = ctx.createGain();
+        const spaceOut = ctx.createGain();
+        const karaokeStage = createKaraokeStage(ctx);
+        karaokeStage.setEnabled(liveKaraokeRef.current);
+        trim.connect(karaokeStage.input);
+        karaokeStage.output.connect(spaceIn);
+        karaokeStageRef.current = karaokeStage;
+        spaceOut.connect(djOut);
+        spaceInRef.current = spaceIn;
+        spaceOutRef.current = spaceOut;
+        eqTrimRef.current = trim;
+        const masterGain = ctx.createGain();
+        masterGain.gain.value = masterLevel(
+          volumeRef.current,
+          mutedRef.current,
+          preampDbRef.current
+        );
+        djOut.connect(masterGain);
+        masterGain.connect(ctx.destination);
+        masterGainRef.current = masterGain;
+        // The master node owns the level from here.
+        handle.setVolume(1);
+        handle.setMuted(false);
 
-      const analyser = ctx.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.8;
-      sourceNode.connect(analyser);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 256;
+        analyser.smoothingTimeConstant = 0.8;
+        sourceNode.connect(analyser);
 
-      const meterSplit = ctx.createChannelSplitter(2);
-      const meterL = ctx.createAnalyser();
-      const meterR = ctx.createAnalyser();
-      meterL.fftSize = 1024;
-      meterR.fftSize = 1024;
-      meterL.smoothingTimeConstant = 0;
-      meterR.smoothingTimeConstant = 0;
-      panNode.connect(meterSplit);
-      meterSplit.connect(meterL, 0);
-      meterSplit.connect(meterR, 1);
-      metersRef.current = [meterL, meterR];
+        const meterSplit = ctx.createChannelSplitter(2);
+        const meterL = ctx.createAnalyser();
+        const meterR = ctx.createAnalyser();
+        meterL.fftSize = 1024;
+        meterR.fftSize = 1024;
+        meterL.smoothingTimeConstant = 0;
+        meterR.smoothingTimeConstant = 0;
+        panNode.connect(meterSplit);
+        meterSplit.connect(meterL, 0);
+        meterSplit.connect(meterR, 1);
+        metersRef.current = [meterL, meterR];
 
-      const padBus = ctx.createGain();
-      padBus.gain.value = 0.9;
-      padBus.connect(masterGain);
-      padBusRef.current = padBus;
+        const padBus = ctx.createGain();
+        padBus.gain.value = 0.9;
+        padBus.connect(masterGain);
+        padBusRef.current = padBus;
 
-      analyserRef.current = analyser;
-      preampNodeRef.current = preamp;
-      panNodeRef.current = panNode;
-      loCutNodeRef.current = loCutNode;
-      djOutRef.current = djOut;
-      djInRef.current = null;
-      filtersRef.current = [];
-      spaceInRef.current = null;
-      spaceOutRef.current = null;
-      fxStagesRef.current = null;
-      subShelfRef.current = null;
-      sweepLpRef.current = null;
-      sweepHpRef.current = null;
-      compRef.current = null;
-      limitRef.current = null;
-      loudLowRef.current = null;
-      loudHighRef.current = null;
-      stGainRef.current = null;
-      stDepthRef.current = null;
-      shaperRef.current = null;
-      routeTargetRef.current = djOut;
-      rackReadyRef.current = false;
-      rackBuildingRef.current = false;
-      applyFX();
-      applyRouting();
-      return analyser;
-    } catch {
-      analyserRef.current = null;
-      return null;
-    }
-  }, [applyRouting, applyFX, context]);
+        analyserRef.current = analyser;
+        preampNodeRef.current = preamp;
+        panNodeRef.current = panNode;
+        loCutNodeRef.current = loCutNode;
+        djOutRef.current = djOut;
+        djInRef.current = null;
+        filtersRef.current = filters;
+
+        fxStagesRef.current = null;
+        subShelfRef.current = null;
+        sweepLpRef.current = null;
+        sweepHpRef.current = null;
+        compRef.current = null;
+        limitRef.current = null;
+        loudLowRef.current = null;
+        loudHighRef.current = null;
+        stGainRef.current = null;
+        stDepthRef.current = null;
+        shaperRef.current = null;
+        routeTargetRef.current = filters[0];
+        rackReadyRef.current = false;
+        rackBuildingRef.current = false;
+        applySpatial();
+        applyFX();
+        applyRouting();
+        return analyser;
+      } catch {
+        analyserRef.current = null;
+        return null;
+      }
+    },
+    [applySpatial, applyRouting, applyFX, context]
+  );
 
   /**
-   * The heavy section, spliced between the mixer head and djOut — EQ ladder,
-   * makeup trim, spatial section, then the serial power chain
+   * The heavy section, spliced after EQ makeup trim and before djOut —
+   * spatial section, then the serial power chain
    * djIn → sub → sweep → FX slots → stutter → dynamics → loudness → trim →
    * djOut. Identical values to the web rack.
    */
@@ -1262,25 +1362,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     rackBuildingRef.current = true;
 
     try {
-      const filters = EQ_BANDS.map((band, bandIndex) => {
-        const filter = ctx.createBiquadFilter();
-        filter.type = "peaking";
-        filter.frequency.value = band.frequency;
-        filter.Q.value = 1;
-        filter.gain.value = eqGainsRef.current[bandIndex];
-        return filter;
-      });
-      const spaceIn = ctx.createGain();
-      const spaceOut = ctx.createGain();
-      const eqTrim = ctx.createGain();
-      eqTrim.gain.value = eqMakeupGain(eqGainsRef.current);
-      let node: RnAudioNode = filters[0];
-      for (let filterIndex = 1; filterIndex < filters.length; filterIndex += 1) {
-        node.connect(filters[filterIndex]);
-        node = filters[filterIndex];
-      }
-      node.connect(eqTrim);
-      eqTrim.connect(spaceIn);
+      const filters = filtersRef.current;
+      const eqTrim = eqTrimRef.current;
+      const spaceOut = spaceOutRef.current;
+      if (!filters.length || !eqTrim || !spaceOut) return false;
 
       const djIn = ctx.createGain();
 
@@ -1320,11 +1405,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         return { input: stageInput, output: stageOutput, dry, wet };
       };
       const stages = new Map<FxName, FxStage>();
-      (
-        ["echo", "reverb", "flanger", "chorus", "phaser", "drive", "roll"] as const
-      ).forEach((name) => {
-        stages.set(name, mkStage());
-      });
+      (["echo", "reverb", "flanger", "chorus", "phaser", "drive", "roll"] as const).forEach(
+        (name) => {
+          stages.set(name, mkStage());
+        }
+      );
 
       const echoDelay = ctx.createDelay(1.5);
       echoDelay.delayTime.value = 0.31;
@@ -1433,13 +1518,13 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       link(subShelf);
       link(sweepLp);
       link(sweepHp);
-      (
-        ["echo", "reverb", "flanger", "chorus", "phaser", "drive", "roll"] as const
-      ).forEach((name) => {
-        const stage = stages.get(name)!;
-        chain.connect(stage.input);
-        chain = stage.output;
-      });
+      (["echo", "reverb", "flanger", "chorus", "phaser", "drive", "roll"] as const).forEach(
+        (name) => {
+          const stage = stages.get(name)!;
+          chain.connect(stage.input);
+          chain = stage.output;
+        }
+      );
       link(stGain);
       link(comp.node);
       link(limit.node);
@@ -1448,13 +1533,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const busTrim = ctx.createGain();
       chain.connect(busTrim);
       busTrim.connect(output);
+      // Space has its own working path. Splice in DJ processing only after
+      // every optional effect has been created successfully.
+      spaceOut.disconnect(output);
       spaceOut.connect(djIn);
-
-      try {
-        head.disconnect(output);
-      } catch {
-        /* not wired */
-      }
 
       filtersRef.current = filters;
       eqTrimRef.current = eqTrim;
@@ -1471,12 +1553,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       stGainRef.current = stGain;
       stDepthRef.current = stDepth;
       shaperRef.current = shaper;
-      spaceInRef.current = spaceIn;
-      spaceOutRef.current = spaceOut;
-      routeTargetRef.current = null;
       rackReadyRef.current = true;
-
-      applySpatial();
       applyFX();
       applyRouting();
       return true;
@@ -1486,11 +1563,12 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     } finally {
       rackBuildingRef.current = false;
     }
-  }, [applySpatial, applyRouting, applyFX, context]);
+  }, [applyRouting, applyFX, context]);
 
   useEffect(() => {
     ensureRackRef.current = ensureRack;
-  }, [ensureRack]);
+    applyRouting();
+  }, [ensureRack, applyRouting]);
 
   // The tag unmounted (endSession): drop the per-element graph state so the
   // next mount rebuilds cleanly in its own onLoad.
@@ -1498,6 +1576,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     if (source) return; // the tag is still mounted — nothing to release
     spatialCleanupRef.current();
     spatialCleanupRef.current = () => {};
+    karaokeStageRef.current?.dispose();
+    karaokeStageRef.current = null;
     try {
       mediaSourceRef.current?.disconnect();
     } catch {
@@ -1522,6 +1602,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         spatialCleanupRef.current();
       };
     }
+    engine?.AudioManager.setSystemOptions?.({ ios: { category: "playback", mode: "default" } });
     void engine?.AudioManager.setAudioSessionActivity(true).catch(() => undefined);
     engine?.AudioManager.observeAudioInterruptions(true);
     /* Android 13+ needs POST_NOTIFICATIONS before the foreground-service
@@ -1530,6 +1611,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     void engine?.AudioManager.requestNotificationPermissions().catch(() => undefined);
     return () => {
       spatialCleanupRef.current();
+      karaokeStageRef.current?.dispose();
     };
   }, []);
 
@@ -1558,6 +1640,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       recoveryRef.current = null;
       const handle = audioRef.current;
       if (!handle || !shouldPlayRef.current || userPausedRef.current) return;
+      if ((!goBackend || goEqActiveRef.current) && !readyRef.current) return;
       void context?.resume().catch(() => undefined);
       if (!pausedRef.current) {
         attemptsRef.current = 0;
@@ -1630,8 +1713,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       filter.gain.setTargetAtTime(eqGains[filterIndex], filter.context.currentTime, 0.04);
     });
     const trim = eqTrimRef.current;
-    if (trim)
-      trim.gain.setTargetAtTime(eqMakeupGain(eqGains), trim.context.currentTime, 0.04);
+    if (trim) trim.gain.setTargetAtTime(eqMakeupGain(eqGains), trim.context.currentTime, 0.04);
     applyRouting();
   }, [eqGains, applyRouting]);
 
@@ -1650,11 +1732,9 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     if (previous && previous.id !== current?.id && !tasteDoneRef.current) {
       const duration = previous.duration || 0;
       const pct = duration ? tastePositionRef.current / duration : 0;
-      recordTaste(
-        playbackKind(pct, tastePositionRef.current, tasteEndedRef.current),
-        previous,
-        { pct }
-      );
+      recordTaste(playbackKind(pct, tastePositionRef.current, tasteEndedRef.current), previous, {
+        pct,
+      });
     }
     tastePositionRef.current = 0;
     tasteEndedRef.current = false;
@@ -1671,14 +1751,45 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
    */
   useEffect(() => {
     if (!current) return;
+    const sameTrack = lastSourceTrackRef.current === current.id;
+    const resumeAt = sameTrack ? positionRef.current : 0;
+    const wasUserPaused = sameTrack && userPausedRef.current;
+    lastSourceTrackRef.current = current.id;
+    if (!sameTrack) {
+      setKaraokeOn(false);
+      setKaraokeError(null);
+    }
+    // Also covers Next, queue jumps, and lock-screen track changes.
+    void loadLyrics(current);
     let cancelled = false;
+
+    const retireSource = () => {
+      // Invalidate queued native callbacks before pause can emit an event.
+      sourceGenerationRef.current += 1;
+      clearRecovery();
+      readyRef.current = false;
+      setLoadedTrackId(null);
+      setBuffering(false);
+      playPendingRef.current = false;
+      pausedRef.current = true;
+      audioRef.current?.pause();
+      try {
+        mediaSourceRef.current?.disconnect();
+      } catch {
+        // The native loader may already have detached this source.
+      }
+      mediaSourceRef.current = null;
+      elementRef.current = null;
+      setPlaying(false);
+    };
+    // Stop immediately, including while resolving an offline file URI.
+    retireSource();
 
     /* The track-switch reset lands in the same commit — the web's loader
        effect did exactly this synchronously (progress back to 0 the instant
        the new song is current, before any position event can arrive). */
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setProgress(0);
-    positionRef.current = 0;
+    setProgress(resumeAt);
+    positionRef.current = resumeAt;
     setDuration(current.duration || 0);
     durationRef.current = current.duration || 0;
     setPlayerError(null);
@@ -1687,13 +1798,18 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     currentRef.current = current;
 
     const arm = (target: string) => {
+      if (cancelled) return;
+      // A retry of the same URL also gets its own loader and cancellation state.
+      retireSource();
       // A source swap pauses the element on its way through.
       swapUntilRef.current = Date.now() + 1500;
-      userPausedRef.current = false;
+      userPausedRef.current = wasUserPaused;
       endedRef.current = false;
+      resumeSourceRef.current = { generation: sourceGenerationRef.current, position: resumeAt };
       clearRecovery();
       readyRef.current = false;
       sourceRefForState.current = target;
+      setSourceGeneration(sourceGenerationRef.current);
       setSource(target);
     };
 
@@ -1701,6 +1817,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const refreshed = freshUrlRef.current;
       freshUrlRef.current = null;
 
+      if (sameTrack && instrumentalSource) {
+        arm(instrumentalSource);
+        return;
+      }
       // A copy held on this device: a file:// URI — no handshake at all.
       if (current.offline) {
         const local = await openPlaybackUrl(current.offline.id);
@@ -1719,13 +1839,15 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     };
     startStreamRef.current = startStream;
 
-    void startStream();
+    void startStream().catch(() => {
+      if (!cancelled) setPlayerError("This track could not be opened. Please try again.");
+    });
     return () => {
       cancelled = true;
       if (startStreamRef.current === startStream) startStreamRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id]);
+  }, [current?.id, instrumentalSource]);
 
   /* ── Expo Go transport ──
    * Without the native engine, the same armed source runs on expo-audio.
@@ -1736,26 +1858,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
    * this provider); only `goTransportRef` is needed here. */
   const goTransportRef = useRef<AudioTransport | null>(null);
   const goHandlersRef = useRef<AudioTransportCallbacks | null>(null);
-
-  /* When a swapped-in source mounts/loads the element: wire the graph (the
-     handle only exists now), apply the rate + envelope and play it if the
-     listener wants it — the native answer to web's `arm()`. */
-  const playPendingRef = useRef(false);
-  useEffect(() => {
-    if (!source) return;
-    const handle = audioRef.current;
-    if (!handle) return;
-    // The graph is wired in onLoad — createMediaElementSource throws while
-    // the tag has no loaded source, and a loaded element self-routes to the
-    // output, so pre-load wiring attempts would only ever fail.
-    handle.setPlaybackRate(rateRef.current);
-    if (shouldPlayRef.current && !playPendingRef.current) {
-      playPendingRef.current = true;
-      // play() lands in onPlay/onWaiting; if the decoder is slow the
-      // watchdog and the retry ladder take over from there.
-      handle.play();
-    }
-  }, [source, ensureGraph]);
 
   /**
    * Re-resolves the active stream: a link that went stale mid-track gets a
@@ -1800,6 +1902,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     const watch = setInterval(() => {
       const track = currentRef.current;
       if (!track || !shouldPlayRef.current || userPausedRef.current) return;
+      // The preview downloads before playing; its own timeout owns that wait.
+      if (goEqActiveRef.current && !readyRef.current) return;
       if (Date.now() < swapUntilRef.current) return;
       if (pausedRef.current) {
         recoverPlayback();
@@ -1849,13 +1953,13 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   // Volume/mute land on the graph's master gain — the single stage that
   // decides loudness.
   useEffect(() => {
-    volumeRef.current = volume;
+    volumeRef.current = localVolume;
     mutedRef.current = muted;
     const master = masterGainRef.current;
     const handle = audioRef.current;
     if (master) {
       master.gain.setTargetAtTime(
-        masterLevel(volume, muted, preampDbRef.current),
+        masterLevel(localVolume, muted, preampDbRef.current),
         master.context.currentTime,
         0.03
       );
@@ -1864,10 +1968,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         handle.setMuted(false);
       }
     } else if (handle) {
-      handle.setVolume(appliedVolume(volume));
+      handle.setVolume(appliedVolume(localVolume));
       handle.setMuted(muted);
     }
-  }, [volume, muted]);
+  }, [localVolume, muted]);
 
   // Mixer head values ride along live — the nodes already sit in the path.
   useEffect(() => {
@@ -1895,8 +1999,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     loCutRef.current = loCut;
     const node = loCutNodeRef.current;
-    if (node)
-      node.frequency.setTargetAtTime(loCut ? 40 : 4, node.context.currentTime, 0.05);
+    if (node) node.frequency.setTargetAtTime(loCut ? 40 : 4, node.context.currentTime, 0.05);
   }, [loCut]);
 
   // Tempo: pitch-true time stretch on the media element.
@@ -1912,6 +2015,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
    * and the lock-screen position report.
    */
   const notificationShownRef = useRef(false);
+  const lastNotificationPositionRef = useRef(0);
   const handlePosition = useCallback(
     (time: number) => {
       positionRef.current = time;
@@ -1927,18 +2031,30 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const dur = durationRef.current || track?.duration || 0;
 
       // Keep the OS session warm with a fresh position (setPositionState).
-      if (track && dur && Number.isFinite(dur) && notificationShownRef.current) {
-        void notify?.show({
-          title: track.title,
-          artist: track.artist,
-          album: track.album || undefined,
-          artwork: track.imageLarge ? { uri: track.imageLarge } : undefined,
-          duration: dur,
-          elapsedTime: Math.min(time, dur),
-          speed: rateRef.current,
-          state: shouldPlayRef.current && !pausedRef.current ? "playing" : "paused",
-          skipInterval: 10,
-        }).catch(() => undefined);
+      if (
+        track &&
+        dur &&
+        Number.isFinite(dur) &&
+        notificationShownRef.current &&
+        now - lastNotificationPositionRef.current >= 1000
+      ) {
+        lastNotificationPositionRef.current = now;
+        void notify
+          ?.show({
+            title: track.title,
+            artist: track.artist,
+            album: track.album || undefined,
+            artwork:
+              track.imageLarge || track.image
+                ? { uri: track.imageLarge || track.image! }
+                : undefined,
+            duration: dur,
+            elapsedTime: Math.min(time, dur),
+            speed: rateRef.current,
+            state: shouldPlayRef.current && !pausedRef.current ? "playing" : "paused",
+            skipInterval: 10,
+          })
+          .catch(() => undefined);
       }
 
       const playingTrack = tasteSongRef.current;
@@ -1986,21 +2102,31 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       title: current.title,
       artist: current.artist,
       album: current.album || undefined,
-      artwork: current.imageLarge ? { uri: current.imageLarge } : undefined,
+      artwork:
+        current.imageLarge || current.image
+          ? { uri: current.imageLarge || current.image! }
+          : undefined,
       duration: durationRef.current || current.duration || undefined,
       elapsedTime: positionRef.current,
       state: playing ? ("playing" as const) : ("paused" as const),
       skipInterval: 10,
     };
-    void notify?.show(info).then(() => {
-      notificationShownRef.current = true;
-    });
+    let alive = true;
+    void notify
+      ?.show(info)
+      .then(() => {
+        if (alive) notificationShownRef.current = true;
+      })
+      .catch(() => {
+        // Permission/service failures must not crash foreground playback.
+      });
     void notify?.enableControl("nextTrack", true).catch(() => undefined);
     void notify?.enableControl("previousTrack", true).catch(() => undefined);
     void notify?.enableControl("seekTo", true).catch(() => undefined);
     void notify?.enableControl("skipForward", true).catch(() => undefined);
     void notify?.enableControl("skipBackward", true).catch(() => undefined);
     return () => {
+      alive = false;
       // Handlers live for the whole provider; metadata updates on change.
     };
   }, [current, playing]);
@@ -2015,21 +2141,19 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!notify) return;
     const subs = [
-      notify.addEventListener("playbackNotificationPlay", () =>
-        transportRef.current?.togglePlay()
-      ),
-      notify.addEventListener("playbackNotificationPause", () =>
-        transportRef.current?.togglePlay()
-      ),
+      notify.addEventListener("playbackNotificationPlay", () => {
+        if (userPausedRef.current || !shouldPlayRef.current) transportRef.current?.togglePlay();
+      }),
+      notify.addEventListener("playbackNotificationPause", () => {
+        if (!userPausedRef.current && shouldPlayRef.current) transportRef.current?.togglePlay();
+      }),
       notify.addEventListener("playbackNotificationNextTrack", () =>
         transportRef.current?.stepTrack(1)
       ),
       notify.addEventListener("playbackNotificationPreviousTrack", () =>
         transportRef.current?.stepTrack(-1)
       ),
-      notify.addEventListener("playbackNotificationStop", () =>
-        transportRef.current?.stop()
-      ),
+      notify.addEventListener("playbackNotificationStop", () => transportRef.current?.stop()),
       notify.addEventListener("playbackNotificationSkipBackward", (event) =>
         transportRef.current?.seek(Math.max(0, positionRef.current - (event.value ?? 10)))
       ),
@@ -2064,6 +2188,13 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   );
 
   const togglePlay = useCallback(() => {
+    if (current && !readyRef.current) {
+      // A tap during preload changes intent, never starts a competing load.
+      shouldPlayRef.current = !shouldPlayRef.current;
+      userPausedRef.current = !shouldPlayRef.current;
+      clearRecovery();
+      return;
+    }
     const handle = audioRef.current;
     if (!handle || !current || !source) return;
     if (pausedRef.current) {
@@ -2089,6 +2220,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       const run = isGuest ? list.slice(0, GUEST_PLAY_LIMIT) : list;
       const track = run[Math.min(position, run.length - 1)];
       if (!track) return;
+      // Fetch on the tap, without waiting for audio or the lyrics panel to mount.
+      void loadLyrics(track);
       // Pressing the tile that is already active toggles playback.
       if (queue[index]?.id === track.id) {
         togglePlay();
@@ -2173,10 +2306,12 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     const ctx = context;
     return {
       webAudio: ctx !== null,
+      equalizer: ctx !== null || goEffectsSupported,
+      spatial: ctx !== null || goEffectsSupported,
       sampleRate: ctx?.sampleRate ?? null,
       channels: ctx?.destination.channelCount ?? null,
     };
-  }, [context]);
+  }, [context, goEffectsSupported]);
 
   /** Stereo RMS pair from the meter taps (0 → silence, ~1 → full swing). */
   const getLevels = useCallback((): [number, number] => {
@@ -2234,10 +2369,12 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
 
   const endSession = useCallback(() => {
     stop();
+    setKaraoke(false);
     shouldPlayRef.current = false;
     setQueue([]);
     setQueueLabel("");
     setSource(null);
+    sourceGenerationRef.current += 1;
     sourceRefForState.current = null;
     setIndex(-1);
     setDuration(0);
@@ -2246,7 +2383,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     setPlaying(false);
     setNowPlayingOpenState(false);
     setMixerOpenState(false);
-  }, [stop]);
+  }, [stop, setKaraoke]);
 
   const jumpTo = useCallback(
     (position: number) => {
@@ -2264,19 +2401,22 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** One-tap party pad — synthesized straight on the audio context. */
-  const playPad = useCallback((name: PadName) => {
-    const ctx = context;
-    if (!ctx) return;
-    let bus = padBusRef.current;
-    if (!bus) {
-      bus = ctx.createGain();
-      bus.gain.value = 0.9;
-      bus.connect(ctx.destination);
-      padBusRef.current = bus;
-    }
-    void ctx.resume().catch(() => undefined);
-    firePad(ctx, bus, name);
-  }, [context]);
+  const playPad = useCallback(
+    (name: PadName) => {
+      const ctx = context;
+      if (!ctx) return;
+      let bus = padBusRef.current;
+      if (!bus) {
+        bus = ctx.createGain();
+        bus.gain.value = 0.9;
+        bus.connect(ctx.destination);
+        padBusRef.current = bus;
+      }
+      void ctx.resume().catch(() => undefined);
+      firePad(ctx, bus, name);
+    },
+    [context]
+  );
 
   const setFx = useCallback((patch: Partial<FxLevels>) => {
     setFxState((levels) => ({ ...levels, ...patch }));
@@ -2384,7 +2524,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     const handle = audioRef.current;
     if (!handle) return;
     const dur = durationRef.current;
-    const target = dur && Number.isFinite(dur) ? Math.max(0, Math.min(seconds, dur)) : Math.max(0, seconds);
+    const target =
+      dur && Number.isFinite(dur) ? Math.max(0, Math.min(seconds, dur)) : Math.max(0, seconds);
     handle.seekToTime(target);
     positionRef.current = target;
     setProgress(target);
@@ -2392,42 +2533,66 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       djOutRef.current.gain.setTargetAtTime(1, djOutRef.current.context.currentTime, 0.02);
   }, []);
 
-  const setVolume = useCallback((value: number) => {
-    setVolumeState(value);
-    setMutedState(false);
-  }, []);
+  const setVolume = useCallback(
+    (value: number) => {
+      if (!Number.isFinite(value)) return;
+      setVolumeState(appliedVolume(value));
+      if (volumeIsDevice) setDeviceVolume(appliedVolume(value));
+      setMutedState(false);
+    },
+    [volumeIsDevice, setDeviceVolume]
+  );
 
   const setMuted = useCallback((value: boolean) => {
     setMutedState(value);
   }, []);
 
-  const applyPreset = useCallback((preset: EqPreset) => {
-    setEqPreset(preset.label);
-    setEqGains([...preset.gains]);
-  }, []);
+  const applyPreset = useCallback(
+    (preset: EqPreset) => {
+      if (!context && !goEffectsSupported) return;
+      setProcessingError(null);
+      setEqPreset(preset.label);
+      setEqGains([...preset.gains]);
+    },
+    [context, goEffectsSupported]
+  );
 
-  const markEqCustom = useCallback((gains: number[]) => {
-    setCustomEqGains([...gains]);
-    setEqPreset("Custom");
-  }, []);
+  const markEqCustom = useCallback(
+    (gains: number[]) => {
+      if (!context && !goEffectsSupported) return;
+      setCustomEqGains([...gains]);
+      setEqPreset("Custom");
+    },
+    [context, goEffectsSupported]
+  );
 
   const applyCustomPreset = useCallback(() => {
+    if (!context && !goEffectsSupported) return;
     setEqPreset("Custom");
     setEqGains([...customEqGains]);
-  }, [customEqGains]);
+  }, [customEqGains, context, goEffectsSupported]);
 
-  const setEqGainsValue = useCallback((gains: number[]) => {
-    setEqGains(gains);
-  }, []);
+  const setEqGainsValue = useCallback(
+    (gains: number[]) => {
+      if (!context && !goEffectsSupported) return;
+      setProcessingError(null);
+      setEqGains(gains);
+    },
+    [context, goEffectsSupported]
+  );
 
   const setSpatialMode = useCallback(
     (mode: SpatialMode) => {
+      if (!context && !goEffectsSupported) return;
+      setProcessingError(null);
       spatialModeRef.current = mode;
       setSpatialModeState(mode);
-      applySpatial();
-      applyRouting();
+      if (context) {
+        applySpatial();
+        applyRouting();
+      }
     },
-    [applySpatial, applyRouting]
+    [context, goEffectsSupported, applySpatial, applyRouting]
   );
 
   /* Keep the transport mirror fresh for the notification event handlers. */
@@ -2439,24 +2604,38 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const handleLoad = useCallback(
     (loadedDuration: number) => {
       readyRef.current = true;
+      setLoadedTrackId(currentRef.current?.id ?? null);
+      setBuffering(false);
       playPendingRef.current = false;
       swapUntilRef.current = 0;
       if (Number.isFinite(loadedDuration) && loadedDuration > 0) {
         durationRef.current = loadedDuration;
         setDuration(loadedDuration);
       }
-      // First load of a mounted element wires the processing graph
-      // (source → pre-amp → … → master → speakers + the analyser taps) —
-      // the only moment createMediaElementSource is legal.
-      if (!analyserRef.current) {
-        const analyser = ensureGraph();
-        setVisualizerReady(Boolean(analyser));
-        if (analyser) {
-          // The master gain owns loudness from here — lift the element back
-          // to unity so only the fader curve moves the level, web parity.
-          const handle = audioRef.current;
-          handle?.setVolume(1);
-          handle?.setMuted(false);
+      const analyser = ensureGraph(true);
+      setVisualizerReady(Boolean(analyser));
+      if (!goBackend) {
+        const handle = audioRef.current;
+        handle?.setPlaybackRate(rateRef.current);
+        if (handle) {
+          const generation = sourceGenerationRef.current;
+          const resume = resumeSourceRef.current;
+          resumeSourceRef.current = null;
+          const play = () => {
+            if (generation !== sourceGenerationRef.current) return;
+            if (shouldPlayRef.current && !userPausedRef.current) {
+              playPendingRef.current = true;
+              handle.play();
+            }
+          };
+          if (resume?.generation === generation && resume.position > 0)
+            void Promise.resolve(handle.seekToTime(resume.position))
+              .then(play)
+              .catch(() => {
+                if (generation === sourceGenerationRef.current)
+                  setPlayerError("Could not resume this audio file.");
+              });
+          else play();
         }
       }
     },
@@ -2467,6 +2646,13 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     (error: Error) => {
       void error;
       if (!current) return;
+      if (instrumentalSource) {
+        setKaraokeOn(false);
+        setKaraokeError(
+          "This instrumental could not be played. Original audio restored; choose another file."
+        );
+        return;
+      }
       if (current.offline) {
         shouldPlayRef.current = false;
         setPlayerError("This saved copy is no longer on this device.");
@@ -2477,8 +2663,14 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
          failing twice in a row is a dead link, so the message shows. */
       streamFailuresRef.current += 1;
       if (streamFailuresRef.current <= 2 && shouldPlayRef.current && !userPausedRef.current) {
+        const generation = sourceGenerationRef.current;
         setTimeout(() => {
-          if (shouldPlayRef.current && !userPausedRef.current) startStreamRef.current?.();
+          if (
+            generation === sourceGenerationRef.current &&
+            shouldPlayRef.current &&
+            !userPausedRef.current
+          )
+            startStreamRef.current?.();
         }, 1500);
         return;
       }
@@ -2486,11 +2678,15 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       setPlayerError("This track could not be streamed — try another one.");
       setPlaying(false);
     },
-    [current]
+    [current, instrumentalSource]
   );
 
   const handleAudioMeta = useCallback((metaDuration: number, ready: boolean) => {
-    if (ready && metaDuration > 0 && (!durationRef.current || !Number.isFinite(durationRef.current))) {
+    if (
+      ready &&
+      metaDuration > 0 &&
+      (!durationRef.current || !Number.isFinite(durationRef.current))
+    ) {
       durationRef.current = metaDuration;
       setDuration(metaDuration);
     }
@@ -2504,60 +2700,152 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     goHandlersRef.current = {
       onLoad: (loadedDuration) => handleLoad(loadedDuration),
       onPlay: () => {
+        setBuffering(false);
         pausedRef.current = false;
+        shouldPlayRef.current = true;
         userPausedRef.current = false;
         clearRecovery();
         attemptsRef.current = 0;
         setPlaying(true);
       },
-      onPause: handlePause,
-      onEnded: handleEnded,
+      onPause: () => {
+        // Expo handles focus and remote controls natively. Do not fight a
+        // lock-screen pause by restarting playback through the watchdog.
+        userPausedRef.current = true;
+        shouldPlayRef.current = false;
+        clearRecovery();
+        handlePause();
+      },
+      onEnded: () => {
+        userPausedRef.current = false;
+        shouldPlayRef.current = true;
+        handleEnded();
+      },
       onError: handleError,
       onPositionChange: handlePosition,
     };
   });
   useEffect(() => {
+    liveKaraokeRef.current = liveKaraoke;
+    karaokeStageRef.current?.setEnabled(liveKaraoke);
+    goEqualizer.setKaraoke(liveKaraoke);
+  }, [goEqualizer, liveKaraoke]);
+  useEffect(() => {
+    goEqualizer.setGains(eqGains);
+  }, [goEqualizer, eqGains]);
+  useEffect(() => {
+    goEqualizer.setSpace(spatialMode);
+  }, [goEqualizer, spatialMode]);
+  useEffect(() => {
     if (!goBackend) return;
-    if (!source) {
+    goEqActiveRef.current = goEqActive;
+    clearRecovery();
+    if (!goPlaybackSource) {
       goTransportRef.current?.dispose();
       goTransportRef.current = null;
       return;
     }
-    const transport = createGoAudioTransport(
-      source,
+    const resumeAt =
+      resumeSourceRef.current?.generation === sourceGeneration
+        ? resumeSourceRef.current.position
+        : goLoadRef.current === sourceGeneration
+          ? positionRef.current
+          : 0;
+    resumeSourceRef.current = null;
+    goLoadRef.current = sourceGeneration;
+    let alive = true;
+    let seeking = resumeAt > 0;
+    const active = () => alive && sourceGeneration === sourceGenerationRef.current;
+    readyRef.current = false;
+    pausedRef.current = true;
+    playPendingRef.current = false;
+    const createTransport = goEqActive ? goEqualizer.createTransport : createGoAudioTransport;
+    const transport = createTransport(
+      goPlaybackSource,
       {
-        onLoad: (loadedDuration) => goHandlersRef.current?.onLoad(loadedDuration),
-        onPlay: () => goHandlersRef.current?.onPlay(),
-        onPause: () => goHandlersRef.current?.onPause(),
-        onEnded: () => goHandlersRef.current?.onEnded(),
-        onError: (error) => goHandlersRef.current?.onError(error),
-        onPositionChange: (time) => goHandlersRef.current?.onPositionChange(time),
+        onLoad: (loadedDuration) => {
+          if (!active()) return;
+          goHandlersRef.current?.onLoad(loadedDuration);
+          if (seeking) {
+            const resumePosition = resumeAt;
+            void Promise.resolve(transport.handle.seekToTime(resumePosition)).then(() => {
+              if (!active()) return;
+              seeking = false;
+              if (shouldPlayRef.current && !userPausedRef.current) transport.handle.play();
+            });
+          }
+        },
+        onPlay: () => {
+          if (active() && !seeking) goHandlersRef.current?.onPlay();
+        },
+        onPause: () => {
+          if (active() && !seeking) goHandlersRef.current?.onPause();
+        },
+        onEnded: () => {
+          if (active() && !seeking) goHandlersRef.current?.onEnded();
+        },
+        onError: (error) => {
+          if (!active()) return;
+          if (goEqActive) {
+            queueMicrotask(() => {
+              if (!active()) return;
+              // Silence the failed source before scheduling fallback, including
+              // failures raised after it has already started playing.
+              transport.handle.setMuted(true);
+              transport.dispose();
+              setGoEqFailedGeneration(sourceGeneration);
+              if (liveKaraokeRef.current) {
+                setKaraokeOn(false);
+                setKaraokeError(
+                  "Vocal reduction stopped because the effects player failed. Original audio restored."
+                );
+              }
+              setProcessingError(`Audio effects: ${error.message} Original playback restored.`);
+              setEqGains([...EQ_PRESETS[0].gains]);
+              setEqPreset("Flat");
+              spatialModeRef.current = "off";
+              setSpatialModeState("off");
+            });
+            return;
+          }
+          goHandlersRef.current?.onError(error);
+        },
+        onPositionChange: (time) => {
+          if (active() && !seeking) goHandlersRef.current?.onPositionChange(time);
+        },
+        onBufferingChange: (waiting) => {
+          if (active()) setBuffering(waiting);
+        },
       },
       {
         volume: appliedVolume(volumeRef.current),
         muted: mutedRef.current,
         rate: rateRef.current,
+        metadata: {
+          title: currentRef.current?.title,
+          artist: currentRef.current?.artist,
+          albumTitle: currentRef.current?.album,
+          artworkUrl: currentRef.current?.imageLarge || currentRef.current?.image,
+        },
       }
     );
     goTransportRef.current = transport;
     audioRef.current = transport.handle;
-    // The play intent (shouldPlayRef) was set by the loader effect — the
-    // element's own effect ran earlier in this commit with no handle yet.
-    if (shouldPlayRef.current && !playPendingRef.current) {
+    if (!seeking && shouldPlayRef.current && !userPausedRef.current) {
       playPendingRef.current = true;
       transport.handle.play();
     }
     return () => {
+      alive = false;
       if (goTransportRef.current === transport) {
         goTransportRef.current = null;
         audioRef.current = null;
       }
       transport.dispose();
     };
-    // The transport is per-source by design; the live handlers ride the ref
-    // above, so nothing else here may recreate the player.
+    // The single source is replaced only for a track change or prepared-audio handoff.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [goBackend, source]);
+  }, [goBackend, goPlaybackSource, sourceGeneration, goEqActive, goEqualizer]);
   useEffect(
     () => () => {
       goTransportRef.current?.dispose();
@@ -2566,18 +2854,28 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const value = useMemo<MusicPlayerValue>(
+  const value = useMemo<PlayerControls>(
     () => ({
       queue,
       queueLabel,
       index,
       current,
       playing,
-      progress,
-      duration,
+      loading,
       volume,
+      volumeIsDevice,
       muted,
+      karaokeOn,
+      karaokeError,
+      setKaraoke,
+      karaokeAvailable: Boolean(current && (context || goEffectsSupported || karaokeUsesFile)),
+      instrumentalPlaying: Boolean(instrumentalSource),
+      karaokeSelecting,
+      instrumentalName: instrumental?.name ?? null,
+      chooseInstrumental,
+      karaokePreparing,
       playerError,
+      processingError,
       visualizerReady,
       nowPlayingOpen,
       setNowPlayingOpen,
@@ -2606,7 +2904,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       setRate,
       sidebarWide,
       setSidebarWide,
-      listenedSeconds,
       sessionPlays,
       getGraphInfo,
       getLevels,
@@ -2638,7 +2935,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       playPad,
       mixerOpen,
       setMixerOpen,
-      mobileNavOpen,
       setMobileNavOpen,
     }),
     [
@@ -2647,11 +2943,23 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       index,
       current,
       playing,
-      progress,
-      duration,
+      loading,
       volume,
+      volumeIsDevice,
       muted,
+      karaokeOn,
+      karaokeUsesFile,
+      instrumentalSource,
+      goEffectsSupported,
+      context,
+      karaokeSelecting,
+      instrumental,
+      chooseInstrumental,
+      karaokePreparing,
+      karaokeError,
+      setKaraoke,
       playerError,
+      processingError,
       visualizerReady,
       nowPlayingOpen,
       setNowPlayingOpen,
@@ -2680,7 +2988,6 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       setRate,
       sidebarWide,
       setSidebarWide,
-      listenedSeconds,
       sessionPlays,
       getGraphInfo,
       getLevels,
@@ -2712,22 +3019,30 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       playPad,
       mixerOpen,
       setMixerOpen,
-      mobileNavOpen,
       setMobileNavOpen,
     ]
   );
 
+  const clock = useMemo(
+    () => ({ progress, duration, listenedSeconds }),
+    [progress, duration, listenedSeconds]
+  );
+
   return (
     <MusicPlayerContext.Provider value={value}>
-      {/* The app tree is a stable sibling — it never remounts with the media
-          element. The singleton `<Audio>` mounts only while a track is armed
-          (an empty src would make react-dom re-fetch the page on web and the
-          native loader gains nothing from an idle element); its handle and
-          the graph tap are re-attached together in the source effect. The
-          meta bridge lives inside the tag so it can read duration/ready. */}
-      {children}
+      {/* Only the media element remounts for each load. The app tree and EQ
+          rack stay mounted, and onLoad attaches the new source to that rack. */}
+      <MobileNavContext.Provider value={mobileNavOpen}>
+        <PlaybackClockContext.Provider value={clock}>
+          <KaraokeProgressContext.Provider value={null}>{children}</KaraokeProgressContext.Provider>
+        </PlaybackClockContext.Provider>
+      </MobileNavContext.Provider>
+      {goBackend ? (
+        <GoEqualizerHost bridge={goEqualizer} onAvailable={handleGoEqAvailable} />
+      ) : null}
       {AudioTagComponent && source ? (
         <AudioTagComponent
+          key={sourceGeneration}
           ref={audioRef}
           source={source}
           context={context ?? undefined}
@@ -2736,32 +3051,78 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
           loop={false}
           preservesPitch
           onPlay={() => {
+            if (sourceGeneration !== sourceGenerationRef.current) return;
+            setBuffering(false);
             pausedRef.current = false;
             userPausedRef.current = false;
             clearRecovery();
             attemptsRef.current = 0;
             setPlaying(true);
           }}
-          onPause={handlePause}
-          onWaiting={recoverPlayback}
-          onPlaying={recoverPlayback}
-          onPositionChange={handlePosition}
+          onPause={() => {
+            if (sourceGeneration === sourceGenerationRef.current) handlePause();
+          }}
+          onWaiting={() => {
+            if (sourceGeneration === sourceGenerationRef.current) {
+              setBuffering(true);
+              recoverPlayback();
+            }
+          }}
+          onPlaying={() => {
+            if (sourceGeneration === sourceGenerationRef.current) {
+              setBuffering(false);
+              recoverPlayback();
+            }
+          }}
+          onPositionChange={(time) => {
+            if (sourceGeneration === sourceGenerationRef.current) handlePosition(time);
+          }}
           onLoad={() => {
+            if (sourceGeneration !== sourceGenerationRef.current) return;
             const track = currentRef.current;
             handleLoad(track?.duration || 0);
           }}
-          onEnded={handleEnded}
-          onError={handleError}
+          onEnded={() => {
+            if (sourceGeneration === sourceGenerationRef.current) handleEnded();
+          }}
+          onError={(error) => {
+            if (sourceGeneration === sourceGenerationRef.current) handleError(error);
+          }}
         >
-          <AudioMetaBridge onMeta={handleAudioMeta} />
+          <AudioMetaBridge
+            onMeta={(metaDuration, ready) => {
+              if (sourceGeneration === sourceGenerationRef.current)
+                handleAudioMeta(metaDuration, ready);
+            }}
+          />
         </AudioTagComponent>
       ) : null}
     </MusicPlayerContext.Provider>
   );
 }
 
-export function useMusicPlayer(): MusicPlayerValue {
+export function useMusicPlayer(): PlayerControls {
   const value = useContext(MusicPlayerContext);
   if (!value) throw new Error("useMusicPlayer must be used within MusicPlayerProvider");
   return value;
+}
+
+/** Preparation updates only the lyrics UI, not the song catalogue. */
+export function useKaraokePreparationProgress(): KaraokePreparationProgress | null {
+  return useContext(KaraokeProgressContext);
+}
+
+/** Subscribe only time displays to the playback clock, never the song catalogue. */
+export function usePlaybackProgress(): PlaybackClock {
+  const value = useContext(PlaybackClockContext);
+  if (!value) throw new Error("usePlaybackProgress must be used within MusicPlayerProvider");
+  return value;
+}
+
+/** Drawer visibility must not invalidate the catalogue or the audio controls. */
+export function useMobileNavOpen(): boolean {
+  const open = useContext(MobileNavContext);
+  if (open === undefined)
+    throw new Error("useMobileNavOpen must be used within MusicPlayerProvider");
+  return open;
 }

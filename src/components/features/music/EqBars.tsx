@@ -3,6 +3,7 @@ import { AccessibilityInfo, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import Animated, {
   Easing,
+  cancelAnimation,
   useAnimatedStyle,
   useSharedValue,
   withDelay,
@@ -62,6 +63,7 @@ function Bar({ delay, color, reduced }: { delay: number; color: string; reduced:
         true
       )
     );
+    return () => cancelAnimation(shared);
   }, [shared, delay, reduced]);
 
   const style = useAnimatedStyle(() => ({

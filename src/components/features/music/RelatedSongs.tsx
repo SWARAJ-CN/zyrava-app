@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Icon } from "@/components/ui/icons";
 import { cn } from "@/lib/cn";
 import { useLibrary } from "@/components/providers/LibraryProvider";
@@ -24,7 +24,7 @@ function cachedRun(id: string): RelatedPick[] | undefined {
 function formatSeconds(value: number): string {
   if (!Number.isFinite(value) || value <= 0) return "0:00";
   const minutes = Math.floor(value / 60);
-  const seconds = Math.round(value % 60);
+  const seconds = Math.floor(value % 60);
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
@@ -97,20 +97,16 @@ export function RelatedSongs({ song }: { song: Song }) {
     };
   }, [picks, song, liked, playlists]);
 
-  if (!loading && !picks?.length) return null;
-
   const shown = picks ?? [];
   const songs = shown.map((pick) => pick.song);
   const label = `Radio · ${song.title}`;
 
   return (
-    <View className="mt-5 min-h-0 flex-1 flex-col">
+    <View className="mt-3 min-h-0 flex-1 flex-col">
       <View className="flex-row flex-none items-center gap-2">
-        <View className="min-w-0">
-          <Text className="text-[10px] font-semibold uppercase tracking-[0.18em] text-muted">
-            Related songs
-          </Text>
-          <Text numberOfLines={1} className="truncate pt-0.5 text-[11px] text-faint-foreground">
+        <View className="min-w-0 flex-1">
+          <Text className="text-base font-semibold text-foreground">Keep listening</Text>
+          <Text numberOfLines={1} className="truncate pt-1 text-xs text-muted">
             Because you&apos;re playing {song.title}
           </Text>
         </View>
@@ -119,9 +115,10 @@ export function RelatedSongs({ song }: { song: Song }) {
           onPress={() => startQueue(songs, label, 0)}
           disabled={!shown.length}
           accessibilityLabel="Play related songs"
-          className="ml-auto size-9 flex-none items-center justify-center rounded-full bg-accent text-accent-foreground shadow-field transition-transform duration-150 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+          className="ml-auto min-h-11 flex-row items-center justify-center gap-2 bg-accent-soft px-3 active:opacity-70 disabled:opacity-40"
         >
-          <Icon name="play" size={15} className="fill-current" />
+          <Icon name="play" size={15} className="text-accent-soft-foreground" />
+          <Text className="text-xs font-semibold text-accent-soft-foreground">Play all</Text>
         </Pressable>
       </View>
 
@@ -129,13 +126,13 @@ export function RelatedSongs({ song }: { song: Song }) {
         className="mt-2 min-h-0 flex-1"
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled
-        contentContainerStyle={{ paddingBottom: 4 }}
+        contentContainerStyle={{ paddingTop: 12, paddingBottom: 20 }}
       >
         {loading ? (
           <View className="flex-col gap-1.5">
             {Array.from({ length: 4 }).map((_, index) => (
               <View key={index} className="animate-pulse flex-row items-center gap-2.5 px-1 py-1.5">
-                <View className="size-10 flex-none rounded-md bg-surface-secondary" />
+                <View className="size-12 flex-none bg-surface-secondary" />
                 <View className="min-w-0 flex-1">
                   <View className="h-3 w-3/4 rounded bg-surface-secondary" />
                   <View className="mt-1.5 h-2.5 w-1/2 rounded bg-surface-secondary" />
@@ -143,8 +140,12 @@ export function RelatedSongs({ song }: { song: Song }) {
               </View>
             ))}
           </View>
+        ) : !shown.length ? (
+          <Text className="py-8 text-sm text-muted">
+            No related tracks found for this song yet.
+          </Text>
         ) : (
-          <View className="flex-col gap-0.5">
+          <View className="flex-col gap-2">
             {shown.map((pick, index) => (
               <PickRow
                 key={pick.song.id}
@@ -182,20 +183,23 @@ function PickRow({
   const [pressed, setPressed] = useState(false);
 
   return (
-    <View className="flex-row w-full items-center gap-2.5 rounded-lg px-1.5 py-1.5 transition-colors active:bg-surface-secondary">
+    <View className="w-full flex-row items-center gap-2 py-3">
       <Pressable
         accessibilityRole="button"
         onPress={() => startQueue(songs, label, index)}
         onPressIn={() => setPressed(true)}
         onPressOut={() => setPressed(false)}
         accessibilityLabel={`Play ${pick.song.title} by ${pick.song.artist}`}
-        className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+        style={{ flexDirection: "row", alignItems: "center", flex: 1, minWidth: 0, gap: 10 }}
       >
-        <View className="relative size-10 flex-none overflow-hidden rounded-md bg-surface-muted">
+        <View
+          style={{ width: 52, height: 52, flexShrink: 0 }}
+          className="overflow-hidden bg-surface-secondary"
+        >
           {pick.song.image ? (
             <Image
               source={{ uri: pick.song.image }}
-              className="absolute inset-0 size-full"
+              style={[StyleSheet.absoluteFill, { width: 52, height: 52 }]}
               resizeMode="cover"
             />
           ) : (
@@ -211,13 +215,10 @@ function PickRow({
           </View>
         </View>
         <View className="min-w-0 flex-1">
-          <Text
-            numberOfLines={1}
-            className="block truncate text-[13px] font-semibold text-foreground"
-          >
+          <Text numberOfLines={1} className="block truncate text-sm font-semibold text-foreground">
             {pick.song.title}
           </Text>
-          <Text numberOfLines={1} className="block truncate text-[11px] text-muted">
+          <Text numberOfLines={1} className="mt-1 block truncate text-xs text-muted">
             {pick.song.artist}
           </Text>
         </View>
@@ -232,7 +233,7 @@ function PickRow({
         accessibilityLabel={
           liked ? `Remove ${pick.song.title} from Liked songs` : `Like ${pick.song.title}`
         }
-        className="size-7 flex-none shrink-0 items-center justify-center rounded-full"
+        className="size-10 flex-none shrink-0 items-center justify-center rounded-full"
       >
         <Icon
           name="heart"

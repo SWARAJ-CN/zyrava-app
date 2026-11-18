@@ -1,16 +1,27 @@
+import { useCustomization } from "@/components/providers/CustomizationProvider";
 import { useState } from "react";
-import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Slider } from "heroui-native";
 import { Icon } from "@/components/ui/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Waveform } from "@/components/features/music/Waveform";
+import { PlaybackSeekBar } from "./PlaybackSeekBar";
 import { EqBars } from "@/components/features/music/EqBars";
 import {
   EQ_BANDS,
   EQ_PRESETS,
   SPATIAL_MODES,
   useMusicPlayer,
+  usePlaybackProgress,
   type EqPreset,
   type SpatialMode,
 } from "@/components/providers/MusicPlayerProvider";
@@ -22,40 +33,22 @@ function sliderValue(value: number | number[]): number {
   return Array.isArray(value) ? value[0] : value;
 }
 
-/**
- * The persistent listening bar — the mobile transport.
- *
- * AppChrome mounts it permanently above every screen; it disappears with the
- * queue (`!current`). Two rows, exactly the web's phone layout:
- *   row 1 — cover · title/artist · queue position · shuffle/prev/play/next/repeat
- *           (the auto-feed sparkle stays beside shuffle),
- *   row 2 — seek slider with mm:ss at both ends · like · add · now-playing
- *           toggle · EQ chip · mute · volume.
- * Pressing the cover/text block opens the now-playing screen through the
- * player's own flag (state-controlled — there is no route to push).
- *
- * The desktop-only clusters (the strict 3-column grid, the xl console button,
- * the 2xl queue-position readout) are dropped: they are pointer-layout
- * affordances, and the dock's Mixer tab carries the console entry on mobile.
- * The `<input type=range>` trio became heroui Sliders (step 1 s seek, step .05
- * volume), and `accentColor: var(--accent)` is what the library paints by
- * default. `env(safe-area-inset-bottom)` → useSafeAreaInsets.
- */
+/** Phone transport: song details and corner actions above playback and seeking. */
 export function StickyPlayerBar() {
+  const { personal } = useCustomization();
   const [eqOpen, setEqOpen] = useState(false);
   const [heavyPending, setHeavyPending] = useState<string | null>(null);
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const {
     queue,
     queueLabel,
     index,
     current,
     playing,
-    progress,
-    duration,
-    volume,
-    muted,
+    loading,
     playerError,
+    processingError,
     visualizerReady,
     nowPlayingOpen,
     setNowPlayingOpen,
@@ -63,11 +56,10 @@ export function StickyPlayerBar() {
     eqGains,
     spatialMode,
     getAnalyser,
+    getGraphInfo,
     togglePlay,
     stepTrack,
     seek,
-    setVolume,
-    setMuted,
     applyPreset,
     markEqCustom,
     setEqGains,
@@ -79,6 +71,10 @@ export function StickyPlayerBar() {
     repeat,
     cycleRepeat,
   } = useMusicPlayer();
+  const { progress, duration } = usePlaybackProgress();
+  const graph = getGraphInfo();
+  const eqSupported = graph.equalizer ?? graph.webAudio;
+  const spaceSupported = graph.spatial ?? graph.webAudio;
 
   const { isLiked, toggleLike, openPicker } = useLibrary();
   // (The web's only requireAuth gate in this file sat on the desktop-only
@@ -155,7 +151,9 @@ export function StickyPlayerBar() {
         onPress={togglePlay}
         className="size-11 items-center justify-center rounded-full bg-foreground text-background transition-transform duration-150 active:scale-95"
       >
-        {playing ? (
+        {loading ? (
+          <ActivityIndicator size="small" accessibilityLabel="Loading audio" />
+        ) : playing ? (
           <Icon name="pause" className="size-4 fill-current text-background" />
         ) : (
           <Icon name="play" className="translate-x-px size-4 fill-current text-background" />
@@ -183,38 +181,16 @@ export function StickyPlayerBar() {
             : "text-muted active:bg-surface-secondary active:text-foreground"
         )}
       >
-        <Icon name="repeat" className={cn("size-4", repeat !== "off" ? "text-brand" : "text-muted")} />
+        <Icon
+          name="repeat"
+          className={cn("size-4", repeat !== "off" ? "text-brand" : "text-muted")}
+        />
         {repeat !== "off" ? (
           <Text className="absolute bottom-0.5 left-1/2 -translate-x-1/2 font-mono text-[7px] font-black uppercase tracking-widest text-brand">
             {repeat === "all" ? "all" : "1"}
           </Text>
         ) : null}
       </Pressable>
-    </View>
-  );
-
-  const seekRow = (
-    <View className="flex-row min-w-0 flex-1 items-center gap-2">
-      <Text className="w-9 flex-none text-right text-[10px] font-semibold tabular-nums text-muted-foreground">
-        {formatSeconds(progress)}
-      </Text>
-      <Slider
-        value={[duration ? Math.min(progress, duration) : 0]}
-        minValue={0}
-        maxValue={Math.max(duration, 1)}
-        step={1}
-        aria-label="Seek"
-        onChange={(values) => seek(sliderValue(values))}
-        className="min-w-0 flex-1"
-      >
-        <Slider.Track className="h-1.5 rounded-full">
-          <Slider.Fill className="rounded-full" />
-          <Slider.Thumb className="size-3.5" />
-        </Slider.Track>
-      </Slider>
-      <Text className="w-9 flex-none text-[10px] font-semibold tabular-nums text-muted-foreground">
-        {formatSeconds(duration)}
-      </Text>
     </View>
   );
 
@@ -232,15 +208,12 @@ export function StickyPlayerBar() {
   return (
     <>
       <View pointerEvents="box-none" className="absolute inset-x-0 bottom-0 z-40">
-        <View
-          pointerEvents="box-none"
-          className="mx-auto w-full max-w-[100rem] px-3"
-          style={{ paddingBottom: Math.max(12, insets.bottom) }}
-        >
+        <View pointerEvents="box-none" className="w-full">
           {/* Equalizer + space panel floats above the bar. */}
-          {eqOpen ? (
+          {eqOpen && !personal ? (
             <ScrollView
-              className="max-h-[72%] rounded-t-field border border-b-0 border-separator bg-surface px-4 pb-3 pt-3 shadow-pop"
+              style={{ maxHeight: height * 0.55 }}
+              className=" rounded-t-field border border-b-0 border-separator bg-surface px-4 pb-3 pt-3 shadow-pop"
               showsVerticalScrollIndicator={false}
             >
               <View className="flex-row items-center justify-between gap-2 pb-2.5">
@@ -263,16 +236,33 @@ export function StickyPlayerBar() {
                 </View>
               </View>
 
+              {!eqSupported ? (
+                <Text className="mb-3 text-xs leading-5 text-muted">
+                  Starting audio effects. If controls stay unavailable, reload the app and update
+                  Android System WebView.
+                </Text>
+              ) : null}
+
+              {eqSupported && !graph.webAudio ? (
+                <Text className="mb-3 text-xs leading-5 text-muted">
+                  EQ and Space · keep the app open. Changes apply to the playing track.
+                </Text>
+              ) : null}
               {/* Presets */}
               <View className="flex-row flex-wrap gap-1.5">
                 {EQ_PRESETS.map((preset) => (
                   <Pressable
                     key={preset.label}
                     accessibilityRole="button"
-                    accessibilityState={{ selected: eqPreset === preset.label }}
+                    disabled={!eqSupported}
+                    accessibilityState={{
+                      selected: eqPreset === preset.label,
+                      disabled: !eqSupported,
+                    }}
                     onPress={() => choosePreset(preset)}
                     className={cn(
                       "min-h-8 rounded-full border px-3 items-center justify-center",
+                      !eqSupported && "opacity-40",
                       eqPreset === preset.label
                         ? "border-transparent bg-accent"
                         : "border-separator bg-surface"
@@ -290,6 +280,11 @@ export function StickyPlayerBar() {
                 ))}
               </View>
 
+              {processingError ? (
+                <Text accessibilityRole="alert" className="pt-2 text-xs text-danger">
+                  {processingError}
+                </Text>
+              ) : null}
               {/* Bands — the phone layout stacks them one under another. */}
               <View className="flex-col gap-2.5 pt-3">
                 {EQ_BANDS.map((band, bandIndex) => (
@@ -298,6 +293,7 @@ export function StickyPlayerBar() {
                       {band.label}
                     </Text>
                     <Slider
+                      isDisabled={!eqSupported}
                       value={[eqGains[bandIndex]]}
                       minValue={-12}
                       maxValue={12}
@@ -329,11 +325,17 @@ export function StickyPlayerBar() {
                 <Text className="pb-2 text-xs font-bold uppercase tracking-wider text-muted-foreground">
                   Space
                 </Text>
+                {!spaceSupported ? (
+                  <Text className="mb-2 text-xs text-muted">
+                    Space is unavailable while the effects player is starting or recovering.
+                  </Text>
+                ) : null}
                 <View className="flex-row flex-wrap gap-1.5">
                   {SPATIAL_MODES.map((mode) => (
                     <Pressable
                       key={mode.value}
                       accessibilityRole="button"
+                      disabled={!spaceSupported}
                       accessibilityLabel={mode.hint}
                       accessibilityState={{ selected: spatialMode === mode.value }}
                       onPress={() => setSpatialMode(mode.value as SpatialMode)}
@@ -359,8 +361,11 @@ export function StickyPlayerBar() {
             </ScrollView>
           ) : null}
 
-          <View className="rounded-t-field border border-b-0 border-separator bg-surface/95 p-2.5 shadow-pop">
-            {/* ── Row 1 = cover · title · transport ───────────────────── */}
+          <View
+            className="rounded-t-field border border-b-0 border-separator bg-surface p-2.5 shadow-pop"
+            style={{ paddingBottom: Math.max(10, insets.bottom) }}
+          >
+            {/* Song details on the left; secondary actions at the upper-right. */}
             <View className="flex-row items-center gap-2.5">
               <Pressable
                 accessibilityRole="button"
@@ -380,7 +385,17 @@ export function StickyPlayerBar() {
                       <Icon name="music" className="size-5 text-faint-foreground" />
                     </View>
                   )}
-                  {playing ? renderWave("absolute inset-0", "text-white") : null}
+                  {loading ? (
+                    <View className="absolute inset-0 items-center justify-center bg-black/45">
+                      <ActivityIndicator
+                        size="small"
+                        color="#fff"
+                        accessibilityLabel="Loading audio"
+                      />
+                    </View>
+                  ) : playing ? (
+                    renderWave("absolute inset-0", "text-white")
+                  ) : null}
                 </View>
                 <View className="min-w-0 flex-1">
                   <Text
@@ -396,101 +411,80 @@ export function StickyPlayerBar() {
                   {/* Queue position stays visible on phones too. */}
                   <Text className="text-[10px] font-medium tabular-nums text-faint-foreground">
                     {index + 1} / {queue.length}
-                    {playerError ? " · stream retry needed" : ""}
+                    {loading ? " · Loading…" : playerError ? " · stream retry needed" : ""}
                   </Text>
                 </View>
               </Pressable>
-              {transport()}
-            </View>
-            {/* ── Row 2 = seek + extras ──────────────────────────────── */}
-            <View className="mt-2 flex-row items-center gap-2">
-              {seekRow}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={isLiked(current) ? "Remove from Liked songs" : "Like this song"}
-                accessibilityState={{ selected: isLiked(current) }}
-                onPress={() => toggleLike(current)}
-                className="size-9 flex-none items-center justify-center rounded-full"
-              >
-                <Icon
-                  name="heart"
+              <View className="shrink-0 flex-row items-center">
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    isLiked(current) ? "Remove from Liked songs" : "Like this song"
+                  }
+                  accessibilityState={{ selected: isLiked(current) }}
+                  onPress={() => toggleLike(current)}
+                  className="size-11 shrink-0 items-center justify-center rounded-full"
+                >
+                  <Icon
+                    name="heart"
+                    className={cn(
+                      "size-4",
+                      isLiked(current) ? "fill-current text-danger" : "text-muted"
+                    )}
+                  />
+                </Pressable>
+                {!personal ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Equalizer and space modes"
+                    accessibilityState={{ expanded: eqOpen }}
+                    onPress={() => setEqOpen((open) => !open)}
+                    className={cn(
+                      "size-11 shrink-0 flex-row items-center justify-center gap-1 rounded-full",
+                      eqChipActive && "bg-accent-soft"
+                    )}
+                  >
+                    <Icon
+                      name="sliders"
+                      className={cn("size-3.5", eqChipActive ? "text-brand" : "text-muted")}
+                    />
+                    <Text
+                      className={cn(
+                        "text-[11px] font-bold",
+                        eqChipActive ? "text-brand" : "text-muted"
+                      )}
+                    >
+                      EQ
+                    </Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Add this song to a playlist"
+                  onPress={() => openPicker(current)}
+                  className="size-11 shrink-0 items-center justify-center rounded-full text-muted"
+                >
+                  <Icon name="plus" className="size-4 text-muted" />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Toggle the now playing side panel"
+                  accessibilityState={{ selected: nowPlayingOpen }}
+                  onPress={() => setNowPlayingOpen(!nowPlayingOpen)}
                   className={cn(
-                    "size-4",
-                    isLiked(current) ? "fill-current text-danger" : "text-muted"
-                  )}
-                />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Add this song to a playlist"
-                onPress={() => openPicker(current)}
-                className="size-9 flex-none items-center justify-center rounded-full text-muted"
-              >
-                <Icon name="plus" className="size-4 text-muted" />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Toggle the now playing side panel"
-                accessibilityState={{ selected: nowPlayingOpen }}
-                onPress={() => setNowPlayingOpen(!nowPlayingOpen)}
-                className={cn(
-                  "size-9 flex-none items-center justify-center rounded-full border",
-                  nowPlayingOpen
-                    ? "border-accent/40 bg-accent-soft text-brand"
-                    : "border-separator text-muted"
-                )}
-              >
-                <Icon name="sidebar" className={cn("size-4", nowPlayingOpen ? "text-brand" : "text-muted")} />
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Equalizer and space modes"
-                onPress={() => setEqOpen((open) => !open)}
-                className={cn(
-                  "flex h-9 flex-none items-center gap-1 rounded-full border px-2.5",
-                  eqChipActive ? "border-accent/40 bg-accent-soft" : "border-separator"
-                )}
-              >
-                <Icon
-                  name="sliders"
-                  className={cn("size-3.5", eqChipActive ? "text-brand" : "text-muted")}
-                />
-                <Text
-                  className={cn(
-                    "text-[11px] font-bold",
-                    eqChipActive ? "text-brand" : "text-muted"
+                    "size-11 shrink-0 items-center justify-center rounded-full",
+                    nowPlayingOpen ? "bg-accent-soft text-brand" : "text-muted"
                   )}
                 >
-                  EQ
-                </Text>
-              </Pressable>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={muted ? "Unmute" : "Mute"}
-                onPress={() => setMuted(!muted)}
-                className="size-9 flex-none items-center justify-center rounded-full text-muted"
-              >
-                {muted ? (
-                  <Icon name="volume-x" className="size-4 text-muted" />
-                ) : (
-                  <Icon name="volume-2" className="size-4 text-muted" />
-                )}
-              </Pressable>
-              <Slider
-                value={[volume]}
-                minValue={0}
-                maxValue={1}
-                step={0.05}
-                aria-label="Volume"
-                onChange={(values) => setVolume(sliderValue(values))}
-                className="w-16"
-              >
-                <Slider.Track className="h-1.5 rounded-full">
-                  <Slider.Fill className="rounded-full" />
-                  <Slider.Thumb className="size-3" />
-                </Slider.Track>
-              </Slider>
+                  <Icon
+                    name="sidebar"
+                    className={cn("size-4", nowPlayingOpen ? "text-brand" : "text-muted")}
+                  />
+                </Pressable>
+              </View>
             </View>
+            <View className="items-center pt-1">{transport()}</View>
+            <PlaybackSeekBar key={current.id} progress={progress} duration={duration} seek={seek} />
             {playerError ? (
               <Text className="mt-1 truncate text-[11px] text-danger">{playerError}</Text>
             ) : null}
@@ -519,11 +513,4 @@ export function StickyPlayerBar() {
       />
     </>
   );
-}
-
-function formatSeconds(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return "0:00";
-  const minutes = Math.floor(value / 60);
-  const seconds = Math.round(value % 60);
-  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }

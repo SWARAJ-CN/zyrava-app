@@ -26,19 +26,13 @@ const ARRIVE_DELAY = 900;
 const LOGIN_MARK = "zyrava:login-dismissed";
 
 export type GuestLockReason =
-  | "playback"
-  | "paging"
-  | "tab"
-  | "like"
-  | "playlist"
-  | "mixer"
-  | "community"
-  | "browse";
+  "playback" | "paging" | "tab" | "like" | "playlist" | "mixer" | "community" | "browse";
 
 const COPY: Record<GuestLockReason, { title: string; description: string }> = {
   playback: {
     title: "That was the free ten",
-    description: "Every visitor gets one page of songs to try the sound out. An account opens the rest.",
+    description:
+      "Every visitor gets one page of songs to try the sound out. An account opens the rest.",
   },
   paging: {
     title: "The next page is members' only",
@@ -129,15 +123,12 @@ export function GuestLockProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const requireAuth = useCallback(
-    (next: GuestLockReason = "browse") => {
-      if (!isGuestRef.current) return true;
-      setReason(next);
-      setLoginOpen(true);
-      return false;
-    },
-    []
-  );
+  const requireAuth = useCallback((next: GuestLockReason = "browse") => {
+    if (!isGuestRef.current) return true;
+    setReason(next);
+    setLoginOpen(true);
+    return false;
+  }, []);
 
   useEffect(() => {
     if (!isGuest || PUBLIC_ROUTES.has(pathname)) return;
@@ -174,47 +165,53 @@ export function GuestLockProvider({ children }: { children: ReactNode }) {
   return (
     <GuestLockContext.Provider value={value}>
       {children}
-      <Modal
-        /* Derived rather than cleared by an effect: signing in mid-ask takes
+      {!PUBLIC_ROUTES.has(pathname) ? (
+        <Modal
+          /* Derived rather than cleared by an effect: signing in mid-ask takes
            the door down itself, with no cascading render. The auth-route term
            force-unmounts it the moment the login/register screen mounts, so
            the dialog's overlay can never sit over its own destination
            (the white screen the lingering exit animation used to paint). */
-        open={loginOpen && isGuest && !PUBLIC_ROUTES.has(pathname)}
-        onClose={closeLogin}
-        title={copy.title}
-        description={copy.description}
-        size="sm"
-        footer={
-          <View className="flex-row items-center justify-end gap-2">
-            <Button variant="ghost" onPress={closeLogin}>
-              Keep listening
-            </Button>
-            <Button variant="primary" onPress={goLogin}>
-              <Icon name="user" className="size-4" />
-              Sign in
-            </Button>
+          open={loginOpen && isGuest && !PUBLIC_ROUTES.has(pathname)}
+          onClose={closeLogin}
+          title={copy.title}
+          description={copy.description}
+          size="sm"
+          footer={
+            <View className="flex-row items-center justify-end gap-2">
+              <Button variant="ghost" onPress={closeLogin}>
+                Keep listening
+              </Button>
+              <Button variant="primary" onPress={goLogin}>
+                <Icon name="user" className="size-4" />
+                Sign in
+              </Button>
+            </View>
+          }
+        >
+          <View className="flex-col gap-4">
+            <View className="flex-col gap-2">
+              {PERKS.map((line) => (
+                <View key={line} className="flex-row items-start gap-2">
+                  <Icon
+                    name="check"
+                    className="mt-0.5 size-3.5 shrink-0 text-brand"
+                    strokeWidth={2.4}
+                  />
+                  <Text className="flex-1 text-xs text-muted">{line}</Text>
+                </View>
+              ))}
+            </View>
+            <Text className="text-[11px] text-faint-foreground">
+              No card, no store, no extra app —{" "}
+              <Text className="font-semibold text-brand underline" onPress={goRegister}>
+                create one
+              </Text>{" "}
+              instead if this is your first time here.
+            </Text>
           </View>
-        }
-      >
-        <View className="flex-col gap-4">
-          <View className="flex-col gap-2">
-            {PERKS.map((line) => (
-              <View key={line} className="flex-row items-start gap-2">
-                <Icon name="check" className="mt-0.5 size-3.5 shrink-0 text-brand" strokeWidth={2.4} />
-                <Text className="flex-1 text-xs text-muted">{line}</Text>
-              </View>
-            ))}
-          </View>
-          <Text className="text-[11px] text-faint-foreground">
-            No card, no store, no extra app —{" "}
-            <Text className="font-semibold text-brand underline" onPress={goRegister}>
-              create one
-            </Text>{" "}
-            instead if this is your first time here.
-          </Text>
-        </View>
-      </Modal>
+        </Modal>
+      ) : null}
     </GuestLockContext.Provider>
   );
 }

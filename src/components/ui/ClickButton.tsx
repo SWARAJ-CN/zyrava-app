@@ -1,26 +1,9 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { AccessibilityInfo } from "react-native";
+import { useMemo, type ReactNode } from "react";
 import { Button, type ButtonProps } from "@/components/ui/Button";
 import { cn } from "@/lib/cn";
 
-/** True while the OS "reduce motion" accessibility setting is on. */
-export function useReduceMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
-
-  useEffect(() => {
-    let mounted = true;
-    AccessibilityInfo.isReduceMotionEnabled().then((enabled: boolean) => {
-      if (mounted) setReduced(enabled);
-    });
-    const subscription = AccessibilityInfo.addEventListener("reduceMotionChanged", setReduced);
-    return () => {
-      mounted = false;
-      subscription.remove();
-    };
-  }, []);
-
-  return reduced;
-}
+import { useReduceMotion } from "@/hooks/useReduceMotion";
+export { useReduceMotion } from "@/hooks/useReduceMotion";
 
 /**
  * A HeroUI button with a short press animation. Pagination and the auth forms
@@ -35,18 +18,18 @@ export function ClickButton({
   ...props
 }: ButtonProps & { square?: boolean }): ReactNode {
   const reduceMotion = useReduceMotion();
+  const animation = useMemo(
+    () => ({
+      scale: {
+        value: reduceMotion ? 1 : 0.94,
+        timingConfig: { duration: reduceMotion ? 0 : 150 },
+        ignoreScaleCoefficient: true,
+      },
+    }),
+    [reduceMotion]
+  );
 
   return (
-    <Button
-      {...props}
-      animation={{
-        scale: {
-          value: reduceMotion ? 1 : 0.94,
-          timingConfig: { duration: reduceMotion ? 0 : 150 },
-          ignoreScaleCoefficient: true,
-        },
-      }}
-      className={cn(square && "rounded-none", className)}
-    />
+    <Button {...props} animation={animation} className={cn(square && "rounded-none", className)} />
   );
 }

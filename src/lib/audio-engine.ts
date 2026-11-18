@@ -10,9 +10,9 @@
  *
  * This shim requires the package inside a try/catch, so an app without the
  * native engine still boots. Playback itself never depends on this module:
- * when it is absent the player provider runs its Expo Go backend on
- * `expo-audio` (see lib/go-audio.ts), and only the studio-grade processing
- * (graph, EQ, FX, spatial, analyser, pads) is out of reach.
+ * when it is absent the player provider runs its Expo Go backend through
+ * a foreground WebView EQ/Space graph, with `expo-audio` as a failure fallback.
+ * The studio FX rack, native analyser and pads still require this engine.
  * Every runtime use MUST go through `getAudioEngine()`; direct imports are
  * allowed only as `import type { … }` (erased at compile time).
  */
@@ -48,7 +48,11 @@ export function getAudioEngine(): AudioEngine | null {
       const usable =
         !!candidate &&
         typeof candidate.AudioContext === "function" &&
-        typeof candidate.Audio === "function";
+        (typeof candidate.Audio === "function" ||
+          (typeof candidate.Audio === "object" &&
+            candidate.Audio !== null &&
+            (candidate.Audio.$$typeof === Symbol.for("react.memo") ||
+              candidate.Audio.$$typeof === Symbol.for("react.forward_ref"))));
       cached = usable ? candidate : null;
       if (usable) {
         lastError = null;

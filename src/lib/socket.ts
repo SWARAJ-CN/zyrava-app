@@ -28,7 +28,9 @@ export type CommunityEvent =
   | "request:resolved"
   | "presence:init"
   | "presence:update"
-  | "typing";
+  | "typing"
+  | "library:changed"
+  | "history:changed";
 
 type Handler = (payload: never) => void;
 
@@ -37,35 +39,41 @@ let authFailures = 0;
 const handlers = new Map<CommunityEvent, Set<Handler>>();
 const statusListeners = new Set<(connected: boolean) => void>();
 
-function bind(socket: Socket) {
-  socket.on("connect", () => {
+function bind(connection: Socket) {
+  connection.on("connect", () => {
     authFailures = 0;
     statusListeners.forEach((notify) => notify(true));
   });
-  socket.on("disconnect", () => statusListeners.forEach((notify) => notify(false)));
+  connection.on("disconnect", () => statusListeners.forEach((notify) => notify(false)));
 
-  socket.on("connect_error", (error: Error & { message?: string }) => {
+  connection.on("connect_error", (error: Error & { message?: string }) => {
     if (error?.message !== "Unauthorized") return;
     authFailures += 1;
     /*
-     * An expired access token is the usual reason, and the socket reconnects on
-     * its own with a fresh one because `auth` below is read per attempt. Three
-     * refusals in a row mean there is no session to recover, so the retry loop
-     * stops rather than hammering the API.
+     * Socket.IO does not automatically reconnect after middleware rejects a
+     * handshake. Refresh first, then explicitly retry with the new token.
      */
     if (authFailures >= MAX_AUTH_RETRIES) {
-      socket.close();
+      connection.close();
       statusListeners.forEach((notify) => notify(false));
       return;
     }
-    void refreshSession();
+    void refreshSession().then((session) => {
+      // Logout or an account switch may have replaced the socket meanwhile.
+      if (socket !== connection) return;
+      if (session) connection.connect();
+      else {
+        connection.close();
+        statusListeners.forEach((notify) => notify(false));
+      }
+    });
   });
 
-  for (const [event, set] of handlers) {
-    socket.on(event, (payload: unknown) => {
-      set.forEach((handler) => handler(payload as never));
-    });
-  }
+  // One dispatcher also covers subscriptions added after connecting. Per-
+  // subscriber socket listeners leaked on unsubscribe and duplicated updates.
+  connection.onAny((event: string, payload: unknown) => {
+    handlers.get(event as CommunityEvent)?.forEach((handler) => handler(payload as never));
+  });
 }
 
 export function connectCommunity(): void {
@@ -92,15 +100,14 @@ export function connectCommunity(): void {
     reconnection: true,
     reconnectionDelay: 800,
     reconnectionDelayMax: 5_000,
-    // React Native has no XMLHttpRequest, so the polling transport the browser
-    // client can fall back to cannot work here — talk websocket only.
-    transports: ["websocket"],
+    // Keep Socket.IO's polling fallback, as in the web client, for networks
+    // that block websocket upgrades. React Native provides XMLHttpRequest.
   });
   bind(socket);
 }
 
 export function disconnectCommunity(): void {
-  handlers.clear();
+  // Mounted providers own their subscriptions and remove them in cleanup.
   socket?.close();
   socket = null;
   authFailures = 0;
@@ -119,7 +126,6 @@ export function onCommunityEvent(event: CommunityEvent, handler: Handler): () =>
   const set = handlers.get(event) ?? new Set<Handler>();
   set.add(handler);
   handlers.set(event, set);
-  socket?.on(event, (payload: unknown) => handler(payload as never));
 
   return () => {
     set.delete(handler);
@@ -135,7 +141,9 @@ export function onCommunityStatus(listener: (connected: boolean) => void): () =>
    * effect that registered it.
    */
   const live = socket?.connected ?? false;
-  queueMicrotask(() => listener(live));
+  queueMicrotask(() => {
+    if (statusListeners.has(listener)) listener(live);
+  });
   return () => {
     statusListeners.delete(listener);
   };

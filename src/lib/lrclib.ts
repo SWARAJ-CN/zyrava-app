@@ -1,6 +1,9 @@
 /*
  * lrclib.net — where lyrics come from.
  *
+ * A configured EXPO_PUBLIC_WEB_BASE_URL uses the web app's lyrics route and
+ * shared server cache. Otherwise the provider pipeline runs on-device.
+ *
  * The catalogue is JioSaavn, whose own lyrics API is signed and not reachable,
  * so this app asks a community lyrics database instead. lrclib is keyless and
  * open to direct callers (on device there is no CORS at all, so the app talks
@@ -25,6 +28,7 @@ import {
   type LyricsResult,
   type LyricsSeed,
 } from "./lyrics";
+import { fetchMusicRoute, musicInt } from "./music-server";
 
 const BASE = "https://lrclib.net/api";
 const TIMEOUT_MS = 8000;
@@ -325,6 +329,34 @@ async function gather(seed: LyricsSeed): Promise<LyricCandidate[]> {
 }
 
 async function resolve(seed: LyricsSeed): Promise<LyricsOutcome> {
+  type HostedLyrics =
+    | { found: false; reason: "none" | "instrumental" }
+    | ({ found: true; matched: LyricsMatch; drift: boolean } & (
+        | { kind: "timed"; lines: { start: number; end: number | null; text: string }[] }
+        | { kind: "plain"; stanzas: string[] }
+      ));
+  const hosted = await fetchMusicRoute<HostedLyrics>(
+    `lyrics?${new URLSearchParams({
+      title: seed.title.trim(),
+      artist: seed.artist.trim(),
+      album: seed.album.trim(),
+      duration: String(musicInt(seed.duration, 0, 6 * 3600, 0)),
+    })}`
+  );
+  if (hosted !== undefined) {
+    if (!hosted.found) return { status: "none", reason: hosted.reason };
+    return {
+      status: "found",
+      result: {
+        matched: hosted.matched,
+        drift: hosted.kind === "plain" ? false : hosted.drift,
+        body: hosted.kind === "timed"
+          ? { kind: "timed", lines: hosted.lines.map((line) => ({ ...line, end: line.end ?? Infinity })) }
+          : { kind: "plain", stanzas: hosted.stanzas },
+      },
+    };
+  }
+
   const candidates = await gather(seed);
   const best = pickBest(seed, candidates);
   if (!best) {

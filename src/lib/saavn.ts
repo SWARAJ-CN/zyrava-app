@@ -1,6 +1,9 @@
 /**
  * JioSaavn (unofficial) music catalogue.
  *
+ * When EXPO_PUBLIC_WEB_BASE_URL is configured, use the web app's existing
+ * music routes. The direct provider pipeline below is for standalone use.
+ *
  * Configured mirrors (the comma-separated URLs in `EXPO_PUBLIC_MUSIC_API`, read
  * through `lib/env`) are tried in order. If every mirror is unavailable, a
  * built-in fallback talks to JioSaavn's own web API directly — the same source
@@ -14,8 +17,16 @@
  * shape; everything is normalised here so the UI only ever sees one shape.
  */
 
+import {
+  isStrongSongMatch,
+  parseSongQuery,
+  rankSearchResults,
+  recordingVersion,
+  searchText,
+} from "./search-ranking";
 import { decryptMediaUrl } from "./des";
 import { MUSIC_API_BASES } from "./env";
+import { fetchMusicRoute, musicInt, MusicServerError } from "./music-server";
 
 /**
  * One base URL per entry; multiple can be supplied comma-separated. Community
@@ -88,11 +99,7 @@ function clean(value: unknown): string {
 }
 
 /** A quality entry is `{ quality, link }` (older forks) or `{ quality, url }` (newer). */
-type QualityTier =
-  | { quality?: unknown; link?: unknown; url?: unknown }
-  | string
-  | null
-  | undefined;
+type QualityTier = { quality?: unknown; link?: unknown; url?: unknown } | string | null | undefined;
 
 function tierUrl(entry: QualityTier): string {
   if (!entry) return "";
@@ -153,8 +160,9 @@ function artistNames(value: unknown): string {
   else if (value && typeof value === "object") {
     const record = value as { primary?: unknown; all?: unknown; name?: unknown };
     if (record.primary || record.all) {
-      (Array.isArray(record.primary) ? record.primary : record.all as unknown[])
-        ?.forEach(collect);
+      (Array.isArray(record.primary) ? record.primary : (record.all as unknown[]))?.forEach(
+        collect
+      );
     } else collect(record.name);
   }
   return names.slice(0, 3).join(", ");
@@ -164,12 +172,11 @@ function toSong(raw: Record<string, unknown>): Song | null {
   const id = clean(raw.id) || clean(raw.song_id);
   if (!id) return null;
 
-  const media = asTierList(raw.downloadUrl ?? raw.download_links)
-    .map((tier) => {
-      // The flat v1 API uses bare strings in download_links.
-      if (typeof tier === "string") return { link: tier };
-      return tier;
-    });
+  const media = asTierList(raw.downloadUrl ?? raw.download_links).map((tier) => {
+    // The flat v1 API uses bare strings in download_links.
+    if (typeof tier === "string") return { link: tier };
+    return tier;
+  });
   const streamUrl = pickTier(media, ["320kbps", "160kbps", "96kbps", "48kbps", "12kbps"]);
   if (!streamUrl) return null;
 
@@ -201,8 +208,7 @@ function toSong(raw: Record<string, unknown>): Song | null {
     duration,
     image: imageUrl(raw.image ?? raw.song_image) || clean(raw.song_image),
     imageLarge:
-      imageUrl(raw.image ?? raw.song_image, ["500x500", "150x150"]) ||
-      clean(raw.song_image),
+      imageUrl(raw.image ?? raw.song_image, ["500x500", "150x150"]) || clean(raw.song_image),
     streamUrl,
     pageUrl: clean(raw.url) || clean(raw.link) || clean(raw.song_link),
   };
@@ -268,10 +274,15 @@ async function playlistFetch<T extends { success?: boolean }>(path: string): Pro
   return null;
 }
 
-export async function searchPlaylists(
-  query: string,
-  limit = 8
-): Promise<PlaylistSearch | null> {
+export async function searchPlaylists(query: string, limit = 8): Promise<PlaylistSearch | null> {
+  query = query.trim();
+  limit = musicInt(limit, 1, 16, 8);
+  if (!query) throw new MusicApiError("Give me something to search for.", 400);
+  const hosted = await fetchMusicRoute<PlaylistSearch>(
+    `playlists?${new URLSearchParams({ q: query, limit: String(limit) })}`
+  );
+  if (hosted !== undefined) return hosted;
+
   const payload = await playlistFetch<{
     success?: boolean;
     data?: { results?: Record<string, unknown>[]; total?: unknown };
@@ -281,8 +292,7 @@ export async function searchPlaylists(
     const playlists = (payload.data.results ?? [])
       .map(toPlaylistSummary)
       .filter((playlist): playlist is PlaylistSummary => playlist !== null);
-    const total =
-      typeof payload.data.total === "number" ? payload.data.total : playlists.length;
+    const total = typeof payload.data.total === "number" ? payload.data.total : playlists.length;
 
     return { playlists, total };
   }
@@ -292,6 +302,17 @@ export async function searchPlaylists(
 }
 
 export async function getPlaylistDetail(id: string): Promise<PlaylistDetail | null> {
+  if (!id) throw new MusicApiError("Missing playlist id.", 400);
+  try {
+    const hosted = await fetchMusicRoute<{ playlist: PlaylistDetail }>(
+      `playlists/${encodeURIComponent(id)}`
+    );
+    if (hosted !== undefined) return hosted.playlist;
+  } catch (error) {
+    if (error instanceof MusicServerError && error.status === 404) return null;
+    throw error;
+  }
+
   const payload = await playlistFetch<{
     success?: boolean;
     data?: Record<string, unknown>;
@@ -302,9 +323,7 @@ export async function getPlaylistDetail(id: string): Promise<PlaylistDetail | nu
     const summary = toPlaylistSummary(data);
     if (summary) {
       const rawSongs = Array.isArray(data.songs) ? (data.songs as Record<string, unknown>[]) : [];
-      const songs = dedupeSongs(
-        rawSongs.map(toSong).filter((song): song is Song => song !== null)
-      );
+      const songs = dedupeSongs(rawSongs.map(toSong).filter((song): song is Song => song !== null));
       return { ...summary, songCount: summary.songCount || songs.length, songs };
     }
   }
@@ -465,7 +484,7 @@ async function getPlaylistDetailDirect(id: string): Promise<PlaylistDetail | nul
 }
 
 function isRetryable(status: number): boolean {
-  return status === 429 || status === 404 || status >= 500;
+  return status === 403 || status === 429 || status === 404 || status >= 500;
 }
 
 /** JioSaavn's own web API rejects requests that do not look like a browser. */
@@ -480,7 +499,8 @@ const JIOSAAVN_USER_AGENT =
 async function searchSongsDirect(
   query: string,
   limit: number,
-  page: number
+  page: number,
+  timeoutMs = 20_000
 ): Promise<SearchSuccess> {
   const searchUrl = new URL("https://www.jiosaavn.com/api.php");
   searchUrl.searchParams.set("__call", "search.getResults");
@@ -498,7 +518,7 @@ async function searchSongsDirect(
       "User-Agent": JIOSAAVN_USER_AGENT,
     },
     cache: "no-store",
-    signal: timeoutSignal(20_000),
+    signal: timeoutSignal(timeoutMs),
   }).catch(() => {
     throw new MusicApiError("Could not reach the music service.", 503);
   });
@@ -507,15 +527,13 @@ async function searchSongsDirect(
     throw new MusicApiError("The music service is rate limiting this host for now.", 429);
   }
 
-  const payload = (await response.json().catch(() => null)) as
-    | { results?: Record<string, unknown>[]; total?: unknown }
-    | null;
+  const payload = (await response.json().catch(() => null)) as {
+    results?: Record<string, unknown>[];
+    total?: unknown;
+  } | null;
 
   if (!response.ok || !payload) {
-    throw new MusicApiError(
-      "The music service search returned an error.",
-      response.status
-    );
+    throw new MusicApiError("The music service search returned an error.", response.status);
   }
 
   const songs = ((payload.results ?? []) as Record<string, unknown>[]).map(toDirectSong);
@@ -543,7 +561,7 @@ function songIdentity(song: Song): string {
     .replace(/\s+/g, " ")
     .trim();
   const artist = song.artist.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
-  return `${title}|${artist}`;
+  return `${title}|${artist}|${recordingVersion(song.title)}`;
 }
 
 /** Exact identity, including the runtime — used for quick lookups. */
@@ -574,10 +592,28 @@ export function dedupeSongs(songs: Song[]): Song[] {
  * preferred over later bases. Only network failures, 429s and 5xx move on to
  * the next mirror.
  */
-export async function searchSongs(
+export async function searchSongs(query: string, limit = 20, page = 1): Promise<SearchSuccess> {
+  query = query.trim();
+  limit = musicInt(limit, 1, 30, 20);
+  page = musicInt(page, 1, 999, 1);
+  if (!query) throw new MusicApiError("Give me something to search for.", 400);
+  const hosted = await fetchMusicRoute<SearchSuccess>(
+    `search?${new URLSearchParams({ q: query, limit: String(limit), page: String(page) })}`
+  );
+  if (hosted !== undefined) return hosted;
+
+  // Mirror /api/music/search's headroom and result limit for every caller,
+  // including suggestions and related songs, not just the home feed.
+  const fetchLimit = Math.min(30, Math.max(limit, Math.ceil(limit * 1.7)));
+  const result = await searchCatalogue(query, fetchLimit, page);
+  return { ...result, songs: result.songs.slice(0, limit) };
+}
+
+async function searchCatalogue(
   query: string,
-  limit = 20,
-  page = 1
+  limit: number,
+  page: number,
+  rankQuery?: string
 ): Promise<SearchSuccess> {
   // No bases configured is fine — the built-in direct fallback below takes
   // over and the section still works out of the box.
@@ -586,7 +622,10 @@ export async function searchSongs(
   for (const base of API_BASES) {
     try {
       const result = await searchSongsOn(base, query, limit, page);
-      return { ...result, songs: dedupeSongs(result.songs) };
+      return {
+        ...result,
+        songs: dedupeSongs(rankQuery ? rankSearchResults(result.songs, rankQuery) : result.songs),
+      };
     } catch (error) {
       if (error instanceof MusicApiError && isRetryable(error.status)) {
         lastError = error;
@@ -599,7 +638,10 @@ export async function searchSongs(
   // No configured mirror answered — try JioSaavn directly before giving up.
   try {
     const result = await searchSongsDirect(query, limit, page);
-    return { ...result, songs: dedupeSongs(result.songs) };
+    return {
+      ...result,
+      songs: dedupeSongs(rankQuery ? rankSearchResults(result.songs, rankQuery) : result.songs),
+    };
   } catch (directError) {
     if (lastError?.status === 429) {
       throw new MusicApiError(
@@ -627,25 +669,20 @@ async function searchSongsOn(
     cache: "no-store",
     signal: timeoutSignal(20_000),
   }).catch(() => {
-    throw new MusicApiError(
-      "Could not reach the music service. Try again shortly.",
-      503
-    );
+    throw new MusicApiError("Could not reach the music service. Try again shortly.", 503);
   });
 
   if (response.status === 429) {
     throw new MusicApiError("This music mirror has hit its request limit.", 429);
   }
 
-  const payload = (await response.json().catch(() => null)) as
-    | {
-        status?: string;
-        success?: boolean;
-        message?: string;
-        data?: { results?: unknown[]; total?: unknown } | unknown[];
-        results?: unknown[];
-      }
-    | null;
+  const payload = (await response.json().catch(() => null)) as {
+    status?: string;
+    success?: boolean;
+    message?: string;
+    data?: { results?: unknown[]; total?: unknown } | unknown[];
+    results?: unknown[];
+  } | null;
 
   if (!response.ok || !payload) {
     throw new MusicApiError(
@@ -674,4 +711,106 @@ async function searchSongsOn(
       : Number.parseInt(String(totalRaw ?? songs.length), 10) || songs.length;
 
   return { songs, total };
+}
+
+// A shared 30-result window gives suggestions and the full list the same best
+// match. Paging slices that window instead of skipping tracks via over-fetch.
+const SEARCH_WINDOW = 30;
+interface SearchSession {
+  expires: number;
+  songs: Song[];
+  nextPage: number;
+  total: number;
+  done: boolean;
+  pending?: Promise<void>;
+}
+const searchSessions = new Map<string, SearchSession>();
+
+async function loadSearchWindow(query: string, page: number): Promise<SearchSuccess> {
+  const intent = parseSongQuery(query);
+  const providerQuery = intent.artist ? `${intent.title} ${intent.artist}` : query;
+  let primary: SearchSuccess;
+  try {
+    primary =
+      (await fetchMusicRoute<SearchSuccess>(
+        `search?${new URLSearchParams({ q: providerQuery, limit: String(SEARCH_WINDOW), page: String(page) })}`
+      )) ?? (await searchCatalogue(providerQuery, SEARCH_WINDOW, page, query));
+  } catch (error) {
+    if (
+      !(error instanceof MusicApiError || error instanceof MusicServerError) ||
+      !isRetryable(error.status)
+    )
+      throw error;
+    primary = await searchSongsDirect(providerQuery, SEARCH_WINDOW, page);
+  }
+  let candidates = primary.songs;
+  // Only broaden a specific first-page lookup when the provider missed it.
+  // All recovery requests are bounded; failed enrichment never discards hits.
+  if (
+    page === 1 &&
+    intent.title.split(" ").length >= 3 &&
+    !candidates.some((song) => isStrongSongMatch(song, query))
+  ) {
+    const recovered = await searchSongsDirect(
+      intent.artist ? intent.title : providerQuery,
+      SEARCH_WINDOW,
+      1,
+      6500
+    ).catch(() => null);
+    if (recovered) candidates = candidates.concat(recovered.songs);
+  }
+  const ranked = dedupeSongs(rankSearchResults(candidates, query));
+  return { songs: ranked.slice(0, SEARCH_WINDOW), total: Math.max(primary.total, ranked.length) };
+}
+
+/** User-entered lookup: consistent ranking for hosted and direct catalogues.
+ * Accumulate unique recordings before slicing, so duplicate releases cannot
+ * create empty pages or skip tracks. Suggestions share this same result pool.
+ */
+export async function searchSongMatches(
+  query: string,
+  limit = 10,
+  page = 1
+): Promise<SearchSuccess> {
+  query = query.trim();
+  if (!query) throw new MusicApiError("Give me something to search for.", 400);
+  limit = musicInt(limit, 1, 30, 10);
+  page = musicInt(page, 1, 999, 1);
+  const key = searchText(query);
+  let session = searchSessions.get(key);
+  if (!session || session.expires <= Date.now()) {
+    session = { expires: Date.now() + 120_000, songs: [], nextPage: 1, total: 0, done: false };
+    searchSessions.set(key, session);
+    if (searchSessions.size > 24) searchSessions.delete(searchSessions.keys().next().value!);
+  }
+  const pool = session;
+  const offset = (page - 1) * limit;
+  while (!pool.done && pool.songs.length < offset + limit) {
+    if (!pool.pending) {
+      const next = pool.nextPage;
+      pool.pending = loadSearchWindow(query, next)
+        .then((result) => {
+          pool.songs = dedupeSongs([...pool.songs, ...result.songs]);
+          pool.total = result.total;
+          pool.nextPage++;
+          // Bound catalogue crawling and memory, including a provider that
+          // incorrectly reports a very large total for duplicate-only pages.
+          pool.done = next * SEARCH_WINDOW >= result.total || !result.songs.length || next >= 10;
+        })
+        .finally(() => {
+          pool.pending = undefined;
+        });
+    }
+    try {
+      await pool.pending;
+    } catch (error) {
+      if (searchSessions.get(key) === pool) searchSessions.delete(key);
+      if (pool.songs.length <= offset) throw error;
+      break; // Keep useful matches if a later page is unavailable.
+    }
+  }
+  return {
+    songs: pool.songs.slice(offset, offset + limit),
+    total: pool.done ? pool.songs.length : Math.max(pool.total, pool.songs.length),
+  };
 }

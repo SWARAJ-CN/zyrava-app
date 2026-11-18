@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { View } from "react-native";
+import { AppState, View } from "react-native";
 import { useCSSVariable } from "uniwind";
 import Svg, { Rect } from "react-native-svg";
 import Animated, {
   useAnimatedProps,
+  useReducedMotion,
   useSharedValue,
   type SharedValue,
 } from "react-native-reanimated";
@@ -17,7 +18,7 @@ import { cn } from "@/lib/cn";
  * 0.16 fall smoothing, calm sine idle drift when there is nothing to sample,
  * and the rAF loop still reads getByteFrequencyData without React state —
  * heights ride a SharedValue and each bar's geometry is applied by a
- * UI-thread animatedProps, so 60 fps visuals still cost nothing per tile.
+ * UI-thread animatedProps, with sampling capped at 24 Hz and 40 bars per visible visualizer.
  *
  * The canvas DPR scaling and ResizeObserver are gone: SVG is vector (no pixel
  * ratio to multiply) and the parent's onLayout reports the same size changes.
@@ -81,6 +82,14 @@ export function Waveform({ getAnalyser, active, className, density = 7, color }:
   const accent = useCSSVariable("var(--accent)");
   const fill = color ?? (typeof accent === "string" && accent ? accent : "#10b981");
 
+  const reducedMotion = useReducedMotion();
+  const [foreground, setForeground] = useState(AppState.currentState === "active");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) =>
+      setForeground(state === "active")
+    );
+    return () => subscription.remove();
+  }, []);
   const activeRef = useRef(active);
   const getAnalyserRef = useRef(getAnalyser);
   /** Same numbers in two seats: a ref for this thread's loop, a shared value
@@ -97,14 +106,23 @@ export function Waveform({ getAnalyser, active, className, density = 7, color }:
   }, [active, getAnalyser]);
 
   useEffect(() => {
+    if (!active || !foreground || reducedMotion) {
+      heights.value = Array(sizeRef.current.bars).fill(0.08);
+      return;
+    }
     let running = true;
+    let frame = 0;
+    let lastFrame = 0;
     /** Kept on this thread so the smoothing keeps its history between frames. */
     let smoothed: number[] = [];
     // One reusable spectrum buffer; resized only when it doesn't match.
     const bufferRef = { data: new Uint8Array(0) };
 
-    const draw = () => {
+    const draw = (timestamp: number) => {
       if (!running) return;
+      frame = requestAnimationFrame(draw);
+      if (timestamp - lastFrame < 1000 / 24) return;
+      lastFrame = timestamp;
       const analyser = getAnalyserRef.current();
       let data: Uint8Array | null = null;
       if (analyser) {
@@ -143,28 +161,31 @@ export function Waveform({ getAnalyser, active, className, density = 7, color }:
 
       smoothed = next;
       heights.value = next;
-      requestAnimationFrame(draw);
     };
 
-    requestAnimationFrame(draw);
+    frame = requestAnimationFrame(draw);
     return () => {
       running = false;
+      cancelAnimationFrame(frame);
     };
 
-    // The loop touches only stable shared values; the rAF chain survives
-    // width changes like the canvas did.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [density]);
+    // Size changes update refs without restarting the animation.
+  }, [active, foreground, reducedMotion, density, heights]);
 
   return (
     <View
+      pointerEvents="none"
       accessibilityElementsHidden
       className={cn("h-full w-full", className)}
       onLayout={(event) => {
         const { width, height } = event.nativeEvent.layout;
         if (width === 0 || height === 0) return;
         // ResizeObserver → onLayout; DPR scaling skipped (vector output).
-        const next = { width, height, bars: Math.max(3, Math.floor(width / density)) };
+        const next = {
+          width,
+          height,
+          bars: Math.min(40, Math.max(3, Math.floor(width / density))),
+        };
         sizeRef.current = next;
         layout.value = next;
         setBars((previous) => (previous === next.bars ? previous : next.bars));

@@ -1,172 +1,110 @@
-import { Image, Pressable, ScrollView, Text, View } from "react-native";
+import { useState } from "react";
+import { FullscreenLyrics } from "./FullscreenLyrics";
+import { Image, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { cn } from "@/lib/cn";
+import { usePanelBackHandler } from "@/hooks/usePanelBackHandler";
 import { Icon } from "@/components/ui/icons";
 import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
-import { NowPlayingTabs, useNowPlayingTab } from "@/components/features/music/NowPlayingTabs";
-import { BeatGlow, songHueSeed } from "@/components/features/music/BeatGlow";
-import { EqBars } from "@/components/features/music/EqBars";
+import { NowPlayingTabs, useNowPlayingTab } from "./NowPlayingTabs";
+import { songHueSeed } from "./BeatGlow";
+import { NowPlayingBackdrop } from "./NowPlayingBackdrop";
+import { NowPlayingTransport } from "./NowPlayingTransport";
 
-/**
- * The Spotify-style "Now playing" screen. The web docks a glass card on the
- * right edge; on mobile the same card becomes a full-screen view that
- * AppChrome mounts permanently — it renders nothing until `nowPlayingOpen`
- * flips (the bar's now-playing toggle), and its close button is the exit.
- *
- * The column is scroll-safe (the lyrics/radio panels flex-1 inside), the
- * beat lights sit behind the artwork, and the tab choice keeps its
- * `zyrava:now-playing-tab` persistence.
- */
+/** A bounded reader: only lyrics/radio scroll; transport never leaves the screen. */
 export function NowPlayingPanel() {
-  const {
-    queue,
-    index,
-    current,
-    playing,
-    queueLabel,
-    nowPlayingOpen,
-    setNowPlayingOpen,
-    togglePlay,
-    progress,
-    duration,
-    getAnalyser,
-  } = useMusicPlayer();
+  const { current, playing, queueLabel, nowPlayingOpen, setNowPlayingOpen, getAnalyser } =
+    useMusicPlayer();
+  const [fullscreen, setFullscreen] = useState(false);
   const insets = useSafeAreaInsets();
-
-  /* Read before the early return below: a hook cannot sit behind a guard. */
+  const { height } = useWindowDimensions();
+  const compact = height < 600;
   const [tab, chooseTab] = useNowPlayingTab();
-
+  usePanelBackHandler(nowPlayingOpen, () => setNowPlayingOpen(false));
   if (!nowPlayingOpen || !current) return null;
 
-  return (
-    <View className="fixed inset-0 z-40 bg-background">
-      {/* Beat-driven RGB lights behind the card's surface. */}
-      <BeatGlow getAnalyser={getAnalyser} playing={playing} hueSeed={songHueSeed(current.id)} />
+  if (fullscreen) return <FullscreenLyrics onClose={() => setFullscreen(false)} />;
 
-      {/* Header */}
+  return (
+    <View
+      accessibilityViewIsModal
+      style={[StyleSheet.absoluteFill, { zIndex: 50 }]}
+      className="bg-background"
+    >
+      <NowPlayingBackdrop
+        getAnalyser={getAnalyser}
+        playing={playing}
+        hueSeed={songHueSeed(current.id)}
+      />
       <View
-        className="flex-row items-center justify-between gap-2 px-5 pb-3"
-        style={{ paddingTop: insets.top + 16 }}
+        className="flex-row items-center justify-between gap-3 px-5"
+        style={{ paddingTop: insets.top + 4, flexShrink: 0 }}
       >
-        <Text numberOfLines={1} className="truncate text-sm font-bold text-foreground">
-          {queueLabel || "Now playing"}
-        </Text>
+        <View className="min-w-0 flex-1">
+          <Text className="text-[10px] font-semibold uppercase tracking-[2px] text-muted">
+            Now playing
+          </Text>
+          {!compact ? (
+            <Text numberOfLines={1} className="mt-1 text-xs text-muted">
+              {queueLabel || "Your queue"}
+            </Text>
+          ) : null}
+        </View>
+        <Pressable
+          onPress={() => setFullscreen(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Fullscreen lyrics"
+          className="h-12 justify-center px-3"
+        >
+          <Text className="text-sm font-semibold text-accent">Fullscreen</Text>
+        </Pressable>
         <Pressable
           accessibilityRole="button"
-          onPress={() => setNowPlayingOpen(false)}
           accessibilityLabel="Close now playing panel"
-          className="size-8 flex-none items-center justify-center rounded-full text-muted active:bg-surface-secondary active:text-foreground"
+          onPress={() => setNowPlayingOpen(false)}
+          className="size-12 items-center justify-center active:opacity-60"
         >
-          <Icon name="x" className="size-4 text-muted" />
+          <Icon name="x" size={24} />
         </Pressable>
       </View>
-
-      <ScrollView
-        className="min-h-0 flex-1"
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: insets.bottom + 24 }}
-        keyboardShouldPersistTaps="handled"
+      <View
+        className="flex-row items-center gap-4 px-5"
+        style={{ paddingVertical: compact ? 6 : 16, flexShrink: 0 }}
       >
-        {/* Artwork with the play overlay */}
         <View
-          className={cn(
-            "group relative w-full overflow-hidden rounded-lg border border-separator bg-surface-muted",
-            /* Reading words needs a window, not a strip. In lyrics mode the art
-               steps down to a banner and the card hands that height back to the
-               lines; the radio tab keeps the square exactly as it was. */
-            tab === "lyrics" ? "h-24" : "aspect-square"
-          )}
+          accessibilityLabel="Song artwork"
+          className="overflow-hidden bg-surface-secondary"
+          style={{ width: compact ? 48 : 80, height: compact ? 48 : 80 }}
         >
           {current.image ? (
             <Image
               source={{ uri: current.imageLarge || current.image }}
-              className="absolute inset-0 size-full"
+              style={{ width: "100%", height: "100%" }}
               resizeMode="cover"
             />
           ) : (
-            <View className="h-full items-center justify-center text-faint-foreground">
-              <Icon name="music" className="size-10 text-faint-foreground" />
+            <View className="flex-1 items-center justify-center">
+              <Icon name="music" size={28} />
             </View>
           )}
-          {playing ? (
-            <View className="absolute left-3 top-3">
-              <EqBars color="#ffffff" />
-            </View>
-          ) : null}
-          <Pressable
-            accessibilityRole="button"
-            onPress={togglePlay}
-            accessibilityLabel={playing ? "Pause" : "Play"}
-            className={cn(
-              "absolute inset-0 items-center justify-center bg-black/40 transition-opacity duration-200",
-              playing ? "opacity-0 active:opacity-100" : "opacity-100"
-            )}
-          >
-            <View className="size-12 items-center justify-center rounded-full bg-white shadow-field">
-              <Icon name={playing ? "pause" : "play"} size={22} className="fill-black text-black" />
-            </View>
-          </Pressable>
         </View>
-
-        {/* Song card — title, artist, album, position */}
-        <View className="min-h-0 flex-1 flex-col pb-4 pt-4">
-          <Text
-            numberOfLines={1}
-            className="truncate text-2xl font-black tracking-tight text-foreground"
-          >
+        <View className="min-w-0 flex-1">
+          <Text numberOfLines={2} className="text-xl font-bold tracking-tight text-foreground">
             {current.title}
           </Text>
-          <Text numberOfLines={1} className="mt-1 truncate text-sm font-medium text-muted">
+          <Text numberOfLines={1} className="mt-1 text-sm text-muted">
             {current.artist}
           </Text>
-          <Text numberOfLines={1} className="mt-0.5 truncate text-xs text-faint-foreground">
-            {current.album}
-            {current.year ? ` · ${current.year}` : ""}
-          </Text>
-
-          <View className="mt-4 flex-row items-center gap-2">
-            <View className="rounded-full border border-separator px-2.5 py-1">
-              <Text className="text-[11px] font-semibold text-muted">
-                {index + 1} of {queue.length}
-              </Text>
-            </View>
-            <Text className="text-[11px] tabular-nums text-faint-foreground">
-              {playing ? `${Math.floor(progress)}s elapsed` : "Paused"}
+          {!compact && current.album ? (
+            <Text numberOfLines={1} className="mt-1 text-xs text-muted">
+              {current.album}
             </Text>
-          </View>
-
-          {/* Slim progress read */}
-          <View className="mt-2.5">
-            <View className="h-1 w-full overflow-hidden rounded-full bg-surface-secondary">
-              <View
-                className="h-full rounded-full bg-brand"
-                style={{ width: `${duration ? Math.min(100, (progress / duration) * 100) : 0}%` }}
-              />
-            </View>
-          </View>
-
-          {/* Lyrics and catalogue radio for whatever is playing, one at a time. */}
-          <NowPlayingTabs song={current} tab={tab} onTab={chooseTab} />
-
-          {/* Quick actions pinned at the bottom, Spotify style */}
-          <View className="mt-8 flex-row items-center gap-2 border-t border-separator pt-3">
-            <Pressable
-              accessibilityRole="button"
-              onPress={togglePlay}
-              accessibilityLabel={playing ? "Pause" : "Play"}
-              className="size-10 items-center justify-center rounded-full bg-accent text-accent-foreground transition-transform duration-150 active:scale-95"
-            >
-              <Icon name={playing ? "pause" : "play"} size={18} className="fill-current text-accent-foreground" />
-            </Pressable>
-            <Text
-              numberOfLines={1}
-              className="ml-auto truncate text-[11px] font-medium text-faint-foreground"
-            >
-              ZYRAVA
-            </Text>
-          </View>
+          ) : null}
         </View>
-      </ScrollView>
+      </View>
+      <View className="min-h-0 flex-1 px-5">
+        <NowPlayingTabs song={current} tab={tab} onTab={chooseTab} />
+        <NowPlayingTransport bottomInset={insets.bottom} compact={compact} />
+      </View>
     </View>
   );
 }

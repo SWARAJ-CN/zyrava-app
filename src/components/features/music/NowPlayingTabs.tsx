@@ -1,12 +1,14 @@
+import { useCustomization } from "@/components/providers/CustomizationProvider";
 import { useCallback, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Tabs } from "heroui-native";
+import { useReduceMotion } from "@/hooks/useReduceMotion";
 import { LyricsPanel } from "@/components/features/music/LyricsPanel";
+import { NowPlayingEqualizer } from "./NowPlayingEqualizer";
 import { RelatedSongs } from "@/components/features/music/RelatedSongs";
 import type { Song } from "@/lib/saavn";
 import { getItem, setItem } from "@/lib/store";
-import { cn } from "@/lib/cn";
 
-export type NowPlayingTab = "lyrics" | "related";
+export type NowPlayingTab = "lyrics" | "related" | "eq";
 
 const TAB_KEY = "zyrava:now-playing-tab";
 
@@ -19,15 +21,16 @@ const TAB_KEY = "zyrava:now-playing-tab";
  */
 function readTab(): NowPlayingTab {
   try {
-    return getItem(TAB_KEY) === "related" ? "related" : "lyrics";
+    const saved = getItem(TAB_KEY);
+    return saved === "related" || saved === "eq" ? saved : "lyrics";
   } catch {
     return "lyrics";
   }
 }
 
 /**
- * Held above the switch because the card needs the choice too: the artwork
- * gives up its square in lyrics mode so the words have a window worth reading.
+ * Held above the switch so the card can give synced lyrics a bounded viewport
+ * while preserving the square artwork in either tab.
  */
 export function useNowPlayingTab(): [NowPlayingTab, (next: NowPlayingTab) => void] {
   const [tab, setTab] = useState<NowPlayingTab>(readTab);
@@ -45,7 +48,7 @@ export function useNowPlayingTab(): [NowPlayingTab, (next: NowPlayingTab) => voi
 }
 
 /**
- * The two things the now playing card shows about the current track.
+ * Lyrics, radio, and shared audio controls inside the now playing card.
  *
  * A Fragment, not a wrapper: the card's own column is what gives either panel
  * a bounded height, and inserting a box here would take `flex-1` away from the
@@ -60,33 +63,45 @@ export function NowPlayingTabs({
   tab: NowPlayingTab;
   onTab: (next: NowPlayingTab) => void;
 }) {
+  const { personal } = useCustomization();
+  const visibleTab = personal && tab === "eq" ? "lyrics" : tab;
+  const reduced = useReduceMotion();
   return (
     <>
-      <View className="mt-5 flex-row flex-none gap-1 rounded-xl border border-separator bg-surface p-1">
-        {(["lyrics", "related"] as const).map((option) => (
-          <Pressable
-            key={option}
-            accessibilityRole="button"
-            accessibilityState={{ selected: tab === option }}
-            onPress={() => onTab(option)}
-            className={cn(
-              "flex h-8 flex-1 items-center justify-center rounded-lg",
-              tab === option ? "bg-accent" : ""
-            )}
-          >
-            <Text
-              className={cn(
-                "text-[11px] font-semibold",
-                tab === option ? "text-accent-foreground" : "text-muted"
-              )}
-            >
-              {option === "lyrics" ? "Lyrics" : "Related songs"}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
+      <Tabs
+        value={visibleTab}
+        onValueChange={(value) => onTab(value as NowPlayingTab)}
+        variant="secondary"
+        animation={reduced ? "disable-all" : undefined}
+        className="shrink-0 gap-0"
+      >
+        <Tabs.List className="w-full border-0">
+          <Tabs.Indicator />
+          {(["lyrics", "related", "eq"] as const)
+            .filter((option) => !personal || option !== "eq")
+            .map((option) => (
+              <Tabs.Trigger key={option} value={option} className="min-h-12 flex-1">
+                {({ isSelected }) => (
+                  <Tabs.Label
+                    className={
+                      isSelected ? "text-sm font-semibold text-foreground" : "text-sm text-muted"
+                    }
+                  >
+                    {option === "lyrics" ? "Lyrics" : option === "related" ? "Related" : "EQ"}
+                  </Tabs.Label>
+                )}
+              </Tabs.Trigger>
+            ))}
+        </Tabs.List>
+      </Tabs>
 
-      {tab === "lyrics" ? <LyricsPanel song={song} /> : <RelatedSongs song={song} />}
+      {visibleTab === "lyrics" ? (
+        <LyricsPanel song={song} />
+      ) : visibleTab === "related" ? (
+        <RelatedSongs song={song} />
+      ) : (
+        <NowPlayingEqualizer />
+      )}
     </>
   );
 }

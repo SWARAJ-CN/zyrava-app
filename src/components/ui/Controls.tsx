@@ -59,6 +59,8 @@ interface SegmentedControlProps {
   onChange: (value: string) => void;
   className?: string;
   ariaLabel?: string;
+  /** Share the available width equally; useful for a small set of view icons. */
+  fit?: boolean;
 }
 
 /**
@@ -72,6 +74,7 @@ export function SegmentedControl({
   onChange,
   className,
   ariaLabel,
+  fit = false,
 }: SegmentedControlProps): ReactNode {
   const reduceMotion = useReduceMotion();
   const [frames, setFrames] = useState<Record<string, { x: number; width: number }>>({});
@@ -97,6 +100,8 @@ export function SegmentedControl({
     transform: [{ translateX: translateX.value }],
   }));
 
+  const Container = fit ? View : ScrollView;
+
   const remember = (key: string) => (event: LayoutChangeEvent) => {
     const { x, width } = event.nativeEvent.layout;
     setFrames((current) =>
@@ -109,13 +114,12 @@ export function SegmentedControl({
   return (
     // `max-w-full` + horizontal scrolling keep the strip usable on narrow
     // phones instead of forcing the whole page wider than the screen.
-    <ScrollView
-      horizontal
-      bounces={false}
-      showsHorizontalScrollIndicator={false}
+    <Container
+      {...(!fit ? { horizontal: true, bounces: false, showsHorizontalScrollIndicator: false } : {})}
       accessibilityLabel={ariaLabel}
       className={cn(
-        "w-auto max-w-full shrink rounded-field bg-segment p-0.5 shadow-field",
+        "max-w-full rounded-field bg-segment p-0.5 shadow-field",
+        fit ? "w-full min-w-0" : "w-auto shrink",
         className
       )}
     >
@@ -134,7 +138,10 @@ export function SegmentedControl({
               accessibilityLabel={option.icon ? option.label : undefined}
               onLayout={remember(option.value)}
               onPress={() => onChange(option.value)}
-              className="flex-none items-center justify-center rounded-[11px] px-3 py-1.5"
+              className={cn(
+                "items-center justify-center rounded-[11px] px-3 py-1.5",
+                fit ? "min-w-0 flex-1" : "flex-none"
+              )}
             >
               {option.icon ? (
                 <View className="h-5 w-6 items-center justify-center">{option.icon}</View>
@@ -152,7 +159,7 @@ export function SegmentedControl({
           );
         })}
       </View>
-    </ScrollView>
+    </Container>
   );
 }
 
@@ -161,6 +168,9 @@ interface SearchInputProps {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  autoFocus?: boolean;
+  onFocus?: () => void;
+  onSubmit?: () => void;
 }
 
 export function SearchInput({
@@ -168,6 +178,9 @@ export function SearchInput({
   onChange,
   placeholder,
   className,
+  autoFocus,
+  onFocus,
+  onSubmit,
 }: SearchInputProps): ReactNode {
   const { t, locale } = useI18n();
   const instance = useId();
@@ -196,7 +209,14 @@ export function SearchInput({
     >
       <SearchField.Group>
         <SearchField.SearchIcon />
-        <SearchField.Input placeholder={placeholder ?? t("Search…")} />
+        <SearchField.Input
+          placeholder={placeholder ?? t("Search…")}
+          autoFocus={autoFocus}
+          onFocus={onFocus}
+          onSubmitEditing={onSubmit}
+          returnKeyType="search"
+          autoCorrect={false}
+        />
         <SearchField.ClearButton accessibilityLabel={t("Clear search")} />
       </SearchField.Group>
     </SearchField>
