@@ -250,3 +250,55 @@ Expo Go and older binaries without the module retain app gain for the mixer.
 The module does not support Expo Go; validate iOS
 volume synchronization on a physical device. See the
 [volume manager documentation](https://github.com/hirbod/react-native-volume-manager).
+
+
+## Optional support
+
+Customization now saves or sends directly through `POST /api/customization/save` without payment.
+The **Buy A Mug** tab offers ₹10, ₹50, ₹100, ₹500, ₹1,000 and custom support amounts
+(₹1–₹10,000, up to two decimal places). Support is voluntary and grants no digital benefits.
+The reserved personal account keeps its existing navigation.
+
+Deploy the matching `zyrava-server` changes before distributing this mobile update:
+`POST /api/customization/donations/order` creates an INR order with an immutable amount
+in paise. Existing Razorpay credentials, verification, webhook, refund reconciliation,
+and payment history are reused. Contributions have purpose `donation`; successful
+capture records support without creating or applying a customization. Legacy purchases
+remain verifiable through payment history and the admin panel. No live charges are
+made by the automated tests.
+
+
+### Testing Android background playback
+
+Use an installed ZYRAVA development or preview APK, not Expo Go. Expo Go's
+WebView effects preview cannot keep running after its host is removed from
+Recent apps. ZYRAVA's native config declares a `mediaPlayback` foreground
+service with `androidFSStopWithTask: false`; rebuild the APK after native config
+changes. The installed engine retains EQ and Space while playing.
+
+Check these scenarios on physical devices: lock the screen, use another app,
+swipe ZYRAVA from Recents while playing, use notification pause/resume/Next,
+and interrupt playback with a call. Verify that a stream retry resumes at the
+current position. A deliberate pause must stay paused after a call.
+
+Android Force stop, the Active apps Stop button, powering off, and some vendor
+battery restrictions can terminate playback. There is no all-device guarantee;
+if a manufacturer's battery manager kills the installed app, review its
+per-app background battery setting. No automatic battery-policy exemption is
+requested. No physical device was attached during the automated checks.
+
+
+### Android media notification actions
+
+The installed Android app uses Previous / Play-Pause / Next as its compact
+transport controls. Signed-in listeners also get a Like/Unlike custom action
+in the expanded/system media player (placement depends on Android). The heart
+uses the same account-backed Liked songs mutation as the app, and ignores stale
+track actions. Expo Go cannot load this native extension.
+
+`npm install` runs `scripts/patch-playback-like.cjs` against the pinned
+react-native-audio-api Android sources. It is idempotent and fails on changed
+upstream patch points so upgrades require review. Rebuild the APK; an OTA or
+Metro reload cannot install the native action. Native compilation/device
+verification still requires an Android SDK or EAS build.
+# zyrava-app
