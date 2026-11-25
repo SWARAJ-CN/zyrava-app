@@ -349,6 +349,7 @@ test("unresolved fonts stop blocking the root screen after the startup deadline"
     "MusicPlayerProvider",
     "LibraryProvider",
     "PlaybackSessionGuard",
+    "NotificationLibraryControls",
   ])
     mocks[`@/components/providers/${name}`] = { [name]: name };
   mocks["@/components/providers/ThemeProvider"].useTheme = () => ({ resolved: "dark" });

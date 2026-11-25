@@ -11,6 +11,7 @@ export const HOME_TABS = [
   { value: "downloads", label: "Downloads" },
   { value: "offline", label: "Offline" },
   { value: "customize", label: "Customize" },
+  { value: "support", label: "Buy A Mug" },
   { value: "payments", label: "Payments" },
 ] as const;
 
@@ -38,7 +39,9 @@ export const HomeTabs = memo(function HomeTabs({
         <Tabs.ScrollView scrollAlign="center" showsHorizontalScrollIndicator={false}>
           <Tabs.Indicator className="border-accent" />
           {HOME_TABS.filter(
-            (tab) => !personal || (tab.value !== "customize" && tab.value !== "payments")
+            (tab) =>
+              !personal ||
+              (tab.value !== "customize" && tab.value !== "payments" && tab.value !== "support")
           ).map((tab) => (
             <Tabs.Trigger key={tab.value} value={tab.value} className="min-h-12 px-4">
               {({ isSelected }) => (

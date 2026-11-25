@@ -1,7 +1,7 @@
 import { matchesRegions, matchesVibe, type Vibe } from "@/components/features/music/filters";
 import type { Song } from "@/lib/saavn";
 
-import { songSearchScore } from "./search-ranking";
+import { songSearchScore, rankSearchResults } from "./search-ranking";
 
 export interface RankingContext {
   /** Typed search phrase, or "" when browsing a region. */
@@ -22,6 +22,7 @@ export interface RankingContext {
  */
 export function rankSongs(songs: Song[], context: RankingContext = {}): Song[] {
   const query = context.query?.trim() ?? "";
+  if (query) return rankSearchResults(songs, query);
   const vibes = context.vibes ?? [];
   const regions = context.regionLabels ?? [];
   const artistCap = context.artistCap ?? (query ? Number.POSITIVE_INFINITY : 2);

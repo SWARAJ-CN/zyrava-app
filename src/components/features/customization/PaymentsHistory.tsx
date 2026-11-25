@@ -8,7 +8,7 @@ interface Payment {
   id: string;
   title: string;
   purpose: string;
-  recipient: CustomizationPerson;
+  recipient: CustomizationPerson | null;
   amount: number;
   currency: string;
   amountRefunded: number;
@@ -27,6 +27,7 @@ interface History {
 }
 export function PaymentsHistory() {
   const [page, setPage] = useState(1);
+  const [checking, setChecking] = useState<string | null>(null);
   const [data, setData] = useState<History | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [settled, setSettled] = useState("");
@@ -55,7 +56,9 @@ export function PaymentsHistory() {
   return (
     <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 210, gap: 16 }}>
       <Text className="text-2xl font-bold text-foreground">Payments</Text>
-      <Text className="text-sm text-muted">Your customization purchases and payment status.</Text>
+      <Text className="text-sm text-muted">
+        Your support contributions, past purchases, and payment status.
+      </Text>
       <Button variant="secondary" loading={busy} onPress={refresh}>
         Refresh payments
       </Button>
@@ -72,23 +75,49 @@ export function PaymentsHistory() {
             </Text>
           </View>
           <Text className="text-sm text-muted">
-            {item.purpose === "customization_gift"
-              ? `Customization for ${item.recipient?.name || "a listener"}`
-              : "Customization for you"}
+            {item.purpose === "donation"
+              ? "Optional support for Zyrava"
+              : item.purpose === "customization_gift"
+                ? `Customization for ${item.recipient?.name || "a listener"}`
+                : "Customization for you"}
           </Text>
           <Text className="text-xs text-muted">
             {item.recipient?.email || item.recipient?.phone}
           </Text>
           <Text className="text-sm text-foreground">
-            Payment: {item.paymentStatus.replace(/_/g, " ")} · Delivery: {item.fulfillmentStatus}
+            Payment: {item.paymentStatus.replace(/_/g, " ")}
+            {item.purpose !== "donation" ? ` · Delivery: ${item.fulfillmentStatus}` : ""}
           </Text>
+          {item.fulfillmentStatus !== "fulfilled" && item.orderId ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy || checking !== null}
+              loading={checking === item.id}
+              onPress={() => {
+                setChecking(item.id);
+                void apiFetch("/api/customization/payments/check", {
+                  method: "POST",
+                  body: { purchaseId: item.id },
+                })
+                  .then(refresh)
+                  .catch((e) =>
+                    setError(e instanceof Error ? e.message : "Could not check payment.")
+                  )
+                  .finally(() => setChecking(null));
+              }}
+            >
+              Check payment
+            </Button>
+          ) : null}
           {item.amountRefunded > 0 ? (
             <Text className="text-sm text-muted">
               Refunded: {formatPaymentAmount(item.amountRefunded, item.currency)}
             </Text>
           ) : null}
           <Text className="text-xs text-muted">
-            {durationLabel(item.durationMinutes)} · {new Date(item.createdAt).toLocaleString()}
+            {item.purpose !== "donation" ? `${durationLabel(item.durationMinutes)} · ` : ""}
+            {new Date(item.createdAt).toLocaleString()}
           </Text>
           <Text selectable className="text-xs text-muted">
             Order {item.orderId || "not created"}

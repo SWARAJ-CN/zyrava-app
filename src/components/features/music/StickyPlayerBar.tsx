@@ -208,7 +208,7 @@ export function StickyPlayerBar() {
   return (
     <>
       <View pointerEvents="box-none" className="absolute inset-x-0 bottom-0 z-40">
-        <View pointerEvents="box-none" className="w-full">
+        <View pointerEvents="box-none" className="w-full px-2">
           {/* Equalizer + space panel floats above the bar. */}
           {eqOpen && !personal ? (
             <ScrollView
@@ -427,10 +427,9 @@ export function StickyPlayerBar() {
                 >
                   <Icon
                     name="heart"
-                    className={cn(
-                      "size-4",
-                      isLiked(current) ? "fill-current text-danger" : "text-muted"
-                    )}
+                    className="size-4 text-muted"
+                    color={isLiked(current) ? "#ff0000" : undefined}
+                    fill={isLiked(current) ? "#ff0000" : "none"}
                   />
                 </Pressable>
                 {!personal ? (

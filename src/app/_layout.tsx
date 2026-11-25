@@ -1,3 +1,4 @@
+import { NotificationLibraryControls } from "@/components/providers/NotificationLibraryControls";
 import { CustomizationProvider } from "@/components/providers/CustomizationProvider";
 import "react-native-reanimated";
 import type { JSX } from "react";
@@ -139,6 +140,7 @@ export default function RootLayout(): JSX.Element | null {
                             <OfflineProvider>
                               <MusicPlayerProvider>
                                 <LibraryProvider>
+                                  <NotificationLibraryControls />
                                   <PlaybackSessionGuard />
                                   {/* AppChrome lives in (app)/_layout, so the shell
                                     paints over every music screen without a second

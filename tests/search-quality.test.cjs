@@ -285,3 +285,74 @@ test("a failed later search page reports an error instead of pretending there ar
   await music.searchSongMatches("Artist", 10, 1);
   await assert.rejects(music.searchSongMatches("Artist", 10, 2), /page unavailable/);
 });
+
+test("an instrumental artist name is not treated as an exact original match", () => {
+  const hidden = song("hidden", original.title, "Instrumental Love Songs");
+  assert.equal(rank.isStrongSongMatch(hidden, "The Child In Us"), false);
+  assert.equal(rank.rankSearchResults([hidden, original], "The Child In Us")[0].id, "original");
+  const variation = song("variation", "The Child In Us (The Dusted Variation)");
+  assert.equal(rank.isStrongSongMatch(variation, "The Child In Us Enigma"), false);
+  assert.equal(
+    rank.rankSearchResults([variation, original], "The Child In Us Enigma")[0].id,
+    "original"
+  );
+  const music = musicRuntime(async () => undefined);
+  assert.equal(music.dedupeSongs([variation, original]).length, 2);
+});
+
+test("short-title recovery preserves the artist query and stays on the recovered source across pages", async () => {
+  const routes = [],
+    directPages = [];
+  const hello = song("hello", "Hello", "Adele");
+  const music = musicRuntime(
+    async (route) => {
+      routes.push(route);
+      return { songs: [song("wrong", "Hello", "Instrumental Love Songs")], total: 1 };
+    },
+    async (url) => {
+      const parsed = new URL(url);
+      if (!String(url).includes("jiosaavn"))
+        return new Response(JSON.stringify({ data: { results: [], total: 0 } }));
+      directPages.push(Number(parsed.searchParams.get("p")));
+      assert.equal(parsed.searchParams.get("q"), "hello");
+      const page = Number(parsed.searchParams.get("p"));
+      return new Response(
+        JSON.stringify({
+          total: 60,
+          results: Array.from({ length: 30 }, (_, index) => ({
+            id: `${page}-${index}`,
+            title: page === 1 && index === 0 ? hello.title : `Other ${page}-${index}`,
+            more_info: {
+              album: "25",
+              duration: "300",
+              encrypted_media_url: "encrypted",
+              artistMap: { primary_artists: [{ name: "Adele" }] },
+            },
+          })),
+        })
+      );
+    }
+  );
+  const first = await music.searchSongMatches("Hello by Adele", 10, 1);
+  assert.equal(first.songs[0].title, "Hello");
+  assert.equal(first.total, 60, "use recovered catalogue total, not the weak mirror's total");
+  assert.equal(
+    new URL("https://example.test/" + routes[0]).searchParams.get("q"),
+    "Hello by Adele"
+  );
+  const fourth = await music.searchSongMatches("Hello by Adele", 10, 4);
+  assert.ok(fourth.songs.every((s) => s.id.startsWith("2-")));
+  assert.deepEqual(directPages, [1, 2]);
+  assert.equal(routes.length, 1, "later pages stay on the selected recovery source");
+});
+
+test('Mix chart leaders keep ranking and rotate languages on mobile', () => {
+  const { interleaveCharts } = runtime({ '@/lib/saavn': {
+    dedupeSongs: songs => [...new Map(songs.map(song => [song.id, song])).values()],
+  } })('lib/trending-mix.ts');
+  const first = song('en1', 'English hit');
+  assert.deepEqual(interleaveCharts([
+    [first, song('en2', 'English second')],
+    [song('hi1', 'Hindi hit'), first],
+  ]).map(song => song.id), ['en1', 'hi1', 'en2']);
+});

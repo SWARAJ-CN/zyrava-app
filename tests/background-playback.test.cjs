@@ -290,3 +290,62 @@ test("installed app waits for audio mode before activating native controls", asy
   assert.equal(plays, 2);
   transport.dispose();
 });
+
+test("Android notification Like uses the current signed-in library and rejects stale songs", async () => {
+  const React = require("react");
+  const { act, create } = require("react-test-renderer");
+  const shows = [],
+    toggles = [];
+  const listeners = new Map();
+  let user = { id: "account" },
+    liked = false;
+  const song = { id: "song", title: "Song" };
+  const { NotificationLibraryControls } = load(
+    "components/providers/NotificationLibraryControls.tsx",
+    {
+      "react-native": {
+        Platform: { OS: "android" },
+        DeviceEventEmitter: {
+          addListener(name, listener) {
+            listeners.set(name, listener);
+            return {
+              remove() {
+                listeners.delete(name);
+              },
+            };
+          },
+        },
+      },
+      "@/lib/audio-engine": {
+        getAudioEngine: () => ({
+          PlaybackNotificationManager: { show: async (info) => shows.push(info) },
+        }),
+      },
+      "./AuthProvider": { useAuth: () => ({ user }) },
+      "./LibraryProvider": {
+        useLibrary: () => ({ isLiked: () => liked, toggleLike: (track) => toggles.push(track.id) }),
+      },
+      "./MusicPlayerProvider": { useMusicPlayer: () => ({ current: song }) },
+    }
+  );
+  let renderer;
+  await act(() => {
+    renderer = create(React.createElement(NotificationLibraryControls));
+  });
+  assert.equal(shows.at(-1).zyravaLikeEnabled, true);
+  assert.equal(shows.at(-1).zyravaLiked, false);
+  await act(() => listeners.get("zyravaPlaybackLike")({ songId: "old-song" }));
+  assert.deepEqual(toggles, []);
+  await act(() => listeners.get("zyravaPlaybackLike")({ songId: "song" }));
+  assert.deepEqual(toggles, ["song"]);
+  await act(() => listeners.get("zyravaPlaybackLike")({ songId: "song" }));
+  assert.deepEqual(toggles, ["song"], "rapid duplicate delivery is ignored");
+  liked = true;
+  await act(() => renderer.update(React.createElement(NotificationLibraryControls)));
+  assert.equal(shows.at(-1).zyravaLiked, true);
+  user = null;
+  await act(() => renderer.update(React.createElement(NotificationLibraryControls)));
+  assert.equal(shows.at(-1).zyravaLikeEnabled, false);
+  assert.equal(listeners.size, 0);
+  await act(() => renderer.unmount());
+});

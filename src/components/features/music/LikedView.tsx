@@ -165,7 +165,7 @@ export function LikedView({
         ) : (
           <View className="items-center justify-center gap-3 px-6 py-16 text-center">
             <View className="size-12 items-center justify-center rounded-full bg-danger-soft text-danger-soft-foreground">
-              <Icon name="heart" className="size-5" />
+              <Icon name="heart" className="size-5" color="#ff0000" fill="#ff0000" />
             </View>
             <View>
               <Text className="text-sm font-semibold text-foreground">No liked songs yet</Text>

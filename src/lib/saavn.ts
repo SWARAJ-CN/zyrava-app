@@ -23,6 +23,7 @@ import {
   rankSearchResults,
   recordingVersion,
   searchText,
+  songSearchScore,
 } from "./search-ranking";
 import { decryptMediaUrl } from "./des";
 import { MUSIC_API_BASES } from "./env";
@@ -561,7 +562,7 @@ function songIdentity(song: Song): string {
     .replace(/\s+/g, " ")
     .trim();
   const artist = song.artist.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim();
-  return `${title}|${artist}|${recordingVersion(song.title)}`;
+  return `${title}|${artist}|${recordingVersion(`${song.title} ${song.album}`)}`;
 }
 
 /** Exact identity, including the runtime — used for quick lookups. */
@@ -657,7 +658,8 @@ async function searchSongsOn(
   base: string,
   query: string,
   limit: number,
-  page: number
+  page: number,
+  timeoutMs = 20_000
 ): Promise<SearchSuccess> {
   const searchUrl = new URL(`${base}/search/songs`);
   searchUrl.searchParams.set("query", query);
@@ -667,7 +669,7 @@ async function searchSongsOn(
   const response = await fetch(searchUrl, {
     headers: { Accept: "application/json" },
     cache: "no-store",
-    signal: timeoutSignal(20_000),
+    signal: timeoutSignal(timeoutMs),
   }).catch(() => {
     throw new MusicApiError("Could not reach the music service. Try again shortly.", 503);
   });
@@ -716,7 +718,13 @@ async function searchSongsOn(
 // A shared 30-result window gives suggestions and the full list the same best
 // match. Paging slices that window instead of skipping tracks via over-fetch.
 const SEARCH_WINDOW = 30;
+type SearchRecoverySource =
+  { kind: "direct"; query: string } | { kind: "mirror"; query: string; base: string };
+interface SearchWindow extends SearchSuccess {
+  source?: SearchRecoverySource;
+}
 interface SearchSession {
+  source?: SearchRecoverySource;
   expires: number;
   songs: Song[];
   nextPage: number;
@@ -726,41 +734,61 @@ interface SearchSession {
 }
 const searchSessions = new Map<string, SearchSession>();
 
-async function loadSearchWindow(query: string, page: number): Promise<SearchSuccess> {
+async function fetchRecovery(source: SearchRecoverySource, page: number): Promise<SearchWindow> {
+  const result =
+    source.kind === "direct"
+      ? await searchSongsDirect(source.query, SEARCH_WINDOW, page, 6500)
+      : await searchSongsOn(source.base, source.query, SEARCH_WINDOW, page, 6500);
+  return { ...result, source };
+}
+
+async function loadSearchWindow(
+  query: string,
+  page: number,
+  source?: SearchRecoverySource
+): Promise<SearchWindow> {
   const intent = parseSongQuery(query);
   const providerQuery = intent.artist ? `${intent.title} ${intent.artist}` : query;
-  let primary: SearchSuccess;
-  try {
-    primary =
-      (await fetchMusicRoute<SearchSuccess>(
-        `search?${new URLSearchParams({ q: providerQuery, limit: String(SEARCH_WINDOW), page: String(page) })}`
-      )) ?? (await searchCatalogue(providerQuery, SEARCH_WINDOW, page, query));
-  } catch (error) {
-    if (
-      !(error instanceof MusicApiError || error instanceof MusicServerError) ||
-      !isRetryable(error.status)
-    )
-      throw error;
-    primary = await searchSongsDirect(providerQuery, SEARCH_WINDOW, page);
+  let primary: SearchWindow;
+  if (source) {
+    primary = await fetchRecovery(source, page);
+  } else
+    try {
+      primary =
+        (await fetchMusicRoute<SearchSuccess>(
+          `search?${new URLSearchParams({ q: query, limit: String(SEARCH_WINDOW), page: String(page), mode: "search" })}`
+        )) ?? (await searchCatalogue(providerQuery, SEARCH_WINDOW, page, query));
+    } catch (error) {
+      if (
+        !(error instanceof MusicApiError || error instanceof MusicServerError) ||
+        !isRetryable(error.status)
+      )
+        throw error;
+      primary = await fetchRecovery({ kind: "direct", query: providerQuery }, page);
+    }
+  if (page === 1 && !primary.songs.some((song) => isStrongSongMatch(song, query))) {
+    // Check content quality even after a successful HTTP response. Include
+    // short titles, and look up the title separately from a misspelled artist.
+    const recoveryQuery = intent.artist ? intent.title : providerQuery;
+    const probes: SearchRecoverySource[] = [
+      { kind: "direct", query: recoveryQuery },
+      ...API_BASES.slice(0, 2).map((base): SearchRecoverySource => ({
+        kind: "mirror",
+        base,
+        query: recoveryQuery,
+      })),
+    ];
+    const recovered = await Promise.allSettled(probes.map((probe) => fetchRecovery(probe, 1)));
+    const bestScore = (result: SearchSuccess) =>
+      Math.max(-Infinity, ...result.songs.map((song) => songSearchScore(song, query)));
+    for (const result of recovered) {
+      if (result.status === "fulfilled" && bestScore(result.value) > bestScore(primary))
+        primary = result.value;
+    }
   }
-  let candidates = primary.songs;
-  // Only broaden a specific first-page lookup when the provider missed it.
-  // All recovery requests are bounded; failed enrichment never discards hits.
-  if (
-    page === 1 &&
-    intent.title.split(" ").length >= 3 &&
-    !candidates.some((song) => isStrongSongMatch(song, query))
-  ) {
-    const recovered = await searchSongsDirect(
-      intent.artist ? intent.title : providerQuery,
-      SEARCH_WINDOW,
-      1,
-      6500
-    ).catch(() => null);
-    if (recovered) candidates = candidates.concat(recovered.songs);
-  }
-  const ranked = dedupeSongs(rankSearchResults(candidates, query));
-  return { songs: ranked.slice(0, SEARCH_WINDOW), total: Math.max(primary.total, ranked.length) };
+  // Keep the recovery source and its total for later windows. Mixing the
+  // original mirror's next page into a recovered catalogue loses matches.
+  return { ...primary, songs: dedupeSongs(rankSearchResults(primary.songs, query)) };
 }
 
 /** User-entered lookup: consistent ranking for hosted and direct catalogues.
@@ -788,10 +816,11 @@ export async function searchSongMatches(
   while (!pool.done && pool.songs.length < offset + limit) {
     if (!pool.pending) {
       const next = pool.nextPage;
-      pool.pending = loadSearchWindow(query, next)
+      pool.pending = loadSearchWindow(query, next, pool.source)
         .then((result) => {
           pool.songs = dedupeSongs([...pool.songs, ...result.songs]);
           pool.total = result.total;
+          pool.source = result.source;
           pool.nextPage++;
           // Bound catalogue crawling and memory, including a provider that
           // incorrectly reports a very large total for duplicate-only pages.

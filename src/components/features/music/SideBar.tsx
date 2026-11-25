@@ -140,12 +140,14 @@ function DockBody({
   onBrowse,
   onRegions,
   onLibraryList,
+  onSignOut,
 }: {
   wide: boolean;
   mobile: boolean;
   onBrowse?: () => void;
   onRegions?: () => void;
   onLibraryList?: () => void;
+  onSignOut: () => void;
 }) {
   const { personal } = useCustomization();
   const router = useRouter();
@@ -194,7 +196,7 @@ function DockBody({
     getGraphInfo,
   } = useMusicPlayer();
   const { resolved, toggle } = useTheme();
-  const { user, status: authStatus, logout } = useAuth();
+  const { user, status: authStatus } = useAuth();
   const { requireAuth } = useGuestLock();
   const accountName = user?.name ?? user?.email ?? user?.phone ?? "Account";
   const accountInitial = accountName.slice(0, 1).toUpperCase();
@@ -306,7 +308,7 @@ function DockBody({
         )}
       >
         {!personal
-          ? (["customize", "payments"] as const).map((destination) => (
+          ? (["customize", "support", "payments"] as const).map((destination) => (
               <Pressable
                 key={destination}
                 accessibilityRole="button"
@@ -319,7 +321,11 @@ function DockBody({
               >
                 <Icon name={destination === "customize" ? "sliders" : "list"} size={18} />
                 <Text className="text-sm text-foreground">
-                  {destination === "customize" ? "Customize" : "Payments"}
+                  {destination === "customize"
+                    ? "Customize"
+                    : destination === "support"
+                      ? "Buy A Mug"
+                      : "Payments"}
                 </Text>
               </Pressable>
             ))
@@ -556,7 +562,9 @@ function DockBody({
                   <View className="size-7 flex-none items-center justify-center rounded-full bg-danger-soft text-danger-soft-foreground">
                     <Icon
                       name="heart"
-                      className="size-3.5 fill-danger text-danger"
+                      className="size-3.5"
+                      color="#ff0000"
+                      fill="#ff0000"
                       strokeWidth={1.8}
                     />
                   </View>
@@ -937,7 +945,7 @@ function DockBody({
                   >
                     {accountName}
                   </Text>
-                  <DockIcon label="Sign out" onClick={() => void logout()}>
+                  <DockIcon label="Sign out" onClick={onSignOut}>
                     <Icon name="log-out" className="size-4 text-muted" strokeWidth={1.9} />
                   </DockIcon>
                 </View>
@@ -990,7 +998,7 @@ function DockBody({
                 <Text className="size-9 items-center justify-center rounded-full bg-accent-soft text-[11px] font-bold uppercase text-brand">
                   {accountInitial}
                 </Text>
-                <DockIcon label="Sign out" onClick={() => void logout()}>
+                <DockIcon label="Sign out" onClick={onSignOut}>
                   <Icon name="log-out" className="size-4 text-muted" strokeWidth={1.9} />
                 </DockIcon>
               </View>
@@ -1042,67 +1050,92 @@ export function SideBar({
   const { setMobileNavOpen } = useMusicPlayer();
   const mobileNavOpen = useMobileNavOpen();
   const insets = useSafeAreaInsets();
+  const { logout } = useAuth();
+  const [logoutOpen, setLogoutOpen] = useState(false);
+  const requestLogout = () => {
+    setMobileNavOpen(false);
+    setLogoutOpen(true);
+  };
 
   const { width } = useWindowDimensions();
   const panelWidth = Math.min(312, width * 0.86);
   const dockColor = useCSSVariable("--color-dock");
   usePanelBackHandler(mobileNavOpen, () => setMobileNavOpen(false));
 
-  if (!mobileNavOpen) return null;
+  if (!mobileNavOpen && !logoutOpen) return null;
 
   return (
-    <Animated.View
-      pointerEvents="auto"
-      entering={DRAWER_FADE_IN}
-      exiting={DRAWER_FADE_OUT}
-      accessibilityViewIsModal={mobileNavOpen}
-      style={[StyleSheet.absoluteFill, { zIndex: 70 }]}
-    >
-      {/* Backdrop — backdrop:bg-black/60 */}
-      <View
-        pointerEvents="none"
-        style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.48)" }]}
-      />
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Close the dock"
-        onPress={() => setMobileNavOpen(false)}
-        className="absolute inset-0"
-      />
-      <Animated.View
-        accessibilityLabel="ZYRAVA dock"
-        entering={DRAWER_SLIDE_IN}
-        exiting={DRAWER_SLIDE_OUT}
-        className="absolute inset-y-0 left-0 flex-col border-r border-dock-line bg-dock shadow-pop"
-        style={[
-          {
-            position: "absolute",
-            top: 0,
-            bottom: 0,
-            left: 0,
-            width: panelWidth,
-            backgroundColor: typeof dockColor === "string" ? dockColor : "#101010",
-            borderTopRightRadius: 24,
-            borderBottomRightRadius: 24,
-            overflow: "hidden",
-            elevation: 16,
-          },
-        ]}
-      >
-        <View
-          className="min-h-0 flex-1 flex-col"
-          style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
+    <>
+      {logoutOpen ? (
+        <ConfirmDialog
+          open
+          title="Sign out of ZYRAVA?"
+          description="You'll need to sign in again to access your account."
+          confirmLabel="Sign out"
+          cancelLabel="Stay signed in"
+          onCancel={() => setLogoutOpen(false)}
+          onConfirm={() => {
+            setLogoutOpen(false);
+            void logout();
+          }}
+        />
+      ) : null}
+      {mobileNavOpen ? (
+        <Animated.View
+          pointerEvents="auto"
+          entering={DRAWER_FADE_IN}
+          exiting={DRAWER_FADE_OUT}
+          accessibilityViewIsModal={mobileNavOpen}
+          style={[StyleSheet.absoluteFill, { zIndex: 70 }]}
         >
-          <DockBody
-            wide
-            mobile
-            onBrowse={onBrowse}
-            onRegions={onRegions}
-            onLibraryList={onLibraryList}
+          {/* Backdrop — backdrop:bg-black/60 */}
+          <View
+            pointerEvents="none"
+            style={[StyleSheet.absoluteFill, { backgroundColor: "rgba(0,0,0,0.48)" }]}
           />
-        </View>
-      </Animated.View>
-    </Animated.View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Close the dock"
+            onPress={() => setMobileNavOpen(false)}
+            className="absolute inset-0"
+          />
+          <Animated.View
+            accessibilityLabel="ZYRAVA dock"
+            entering={DRAWER_SLIDE_IN}
+            exiting={DRAWER_SLIDE_OUT}
+            className="absolute inset-y-0 left-0 flex-col border-r border-dock-line bg-dock shadow-pop"
+            style={[
+              {
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: 0,
+                width: panelWidth,
+                backgroundColor: typeof dockColor === "string" ? dockColor : "#101010",
+                borderTopRightRadius: 24,
+                borderBottomRightRadius: 24,
+                overflow: "hidden",
+                elevation: 16,
+              },
+            ]}
+          >
+            <View
+              className="min-h-0 flex-1 flex-col"
+              style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
+            >
+              <DockBody
+                wide
+                mobile
+                onBrowse={onBrowse}
+                onRegions={onRegions}
+                onLibraryList={onLibraryList}
+                onSignOut={requestLogout}
+              />
+            </View>
+          </Animated.View>
+        </Animated.View>
+      ) : null}
+    </>
   );
 }
 

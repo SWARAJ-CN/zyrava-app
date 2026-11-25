@@ -56,19 +56,12 @@ for (const [name, Audio] of [
   });
 }
 
-test("seek gesture holds its preview through clock ticks and seeks once on release", async () => {
-  const Slider = "Slider";
+test("seek bar accepts one tap, holds its preview through stale ticks, and drags once on release", async () => {
   const { PlaybackSeekBar, formatPlaybackTime } = load(
     "components/features/music/PlaybackSeekBar.tsx",
     {
       "react-native": { Text: "Text", View: "View" },
-      "heroui-native": {
-        Slider: Object.assign((props) => React.createElement(Slider, props), {
-          Track: "Track",
-          Fill: "Fill",
-          Thumb: "Thumb",
-        }),
-      },
+      "heroui-native": { useThemeColor: () => "#34d399" },
     }
   );
   const seeks = [];
@@ -77,28 +70,56 @@ test("seek gesture holds its preview through clock ticks and seeks once on relea
   await act(() => {
     renderer = create(React.createElement(PlaybackSeekBar, props));
   });
-  await act(() => renderer.root.findByType("Slider").props.onChange([75]));
+  const bar = () => renderer.root.findByProps({ accessibilityLabel: "Seek" });
+  const touch = (x) => ({ nativeEvent: { locationX: x, pageX: x + 40 } });
+  await act(() => bar().props.onLayout({ nativeEvent: { layout: { width: 180 } } }));
+  assert.equal(bar().props.onStartShouldSetResponder(), true);
+  assert.equal(bar().props.style.height, 44);
+  await act(() => bar().props.onResponderGrant(touch(75)));
+  assert.equal(bar().props.accessibilityValue.now, 75);
+  await act(() => bar().props.onResponderRelease(touch(75)));
+  assert.deepEqual(seeks, [75], "one tap commits one seek");
   await act(() =>
     renderer.update(React.createElement(PlaybackSeekBar, { ...props, progress: 11 }))
   );
-  assert.deepEqual(renderer.root.findByType("Slider").props.value, [75]);
-  assert.deepEqual(seeks, []);
-  await act(() => renderer.root.findByType("Slider").props.onChangeEnd([75]));
-  assert.deepEqual(seeks, [75]);
+  assert.equal(bar().props.accessibilityValue.now, 75, "old decoder tick cannot undo tap feedback");
   await act(() =>
     renderer.update(React.createElement(PlaybackSeekBar, { ...props, progress: 75 }))
   );
-  assert.deepEqual(renderer.root.findByType("Slider").props.value, [75]);
+  await act(() =>
+    renderer.update(React.createElement(PlaybackSeekBar, { ...props, progress: 77 }))
+  );
+  assert.equal(bar().props.accessibilityValue.now, 77, "clock resumes after acknowledgement");
+  await act(() => bar().props.onResponderGrant(touch(50)));
+  await act(() => bar().props.onResponderMove(touch(100)));
+  await act(() =>
+    renderer.update(React.createElement(PlaybackSeekBar, { ...props, progress: 78 }))
+  );
+  assert.equal(bar().props.accessibilityValue.now, 100);
+  assert.deepEqual(seeks, [75], "drag does not repeatedly seek the decoder");
+  await act(() => bar().props.onResponderRelease(touch(190)));
+  assert.deepEqual(seeks, [75, 180], "release is clamped to duration");
+  await act(() => bar().props.onResponderGrant(touch(50)));
+  await act(() => bar().props.onResponderTerminate());
+  assert.equal(bar().props.accessibilityValue.now, 78);
+  assert.deepEqual(seeks, [75, 180], "interrupted gesture does not seek");
+  await act(() => bar().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
+  assert.deepEqual(seeks, [75, 180, 88]);
   await act(() => renderer.update(React.createElement(PlaybackSeekBar, { ...props, duration: 0 })));
-  assert.equal(renderer.root.findByType("Slider").props.isDisabled, true);
-  await act(() => renderer.root.findByType("Slider").props.onChangeEnd([100]));
-  assert.deepEqual(seeks, [75]);
+  assert.equal(bar().props.onStartShouldSetResponder(), false);
+  await act(() => bar().props.onAccessibilityAction({ nativeEvent: { actionName: "increment" } }));
+  assert.deepEqual(seeks, [75, 180, 88]);
   assert.equal(formatPlaybackTime(59.9), "0:59");
   assert.equal(formatPlaybackTime(60), "1:00");
   await act(() => renderer.unmount());
 });
 
 function audioHarness(options = {}) {
+  const storage = options.storage ?? new Map();
+  let appStateListener, interruptionListener;
+  let timerId = 0;
+  const timeouts = new Map(),
+    intervals = new Map();
   const instances = [];
   const events = [];
   const lyricPrefetches = [];
@@ -238,7 +259,15 @@ function audioHarness(options = {}) {
   const player = load(
     "components/providers/MusicPlayerProvider.tsx",
     {
-      "react-native": { AppState: { addEventListener: () => ({ remove() {} }) } },
+      "react-native": {
+        AppState: {
+          currentState: "active",
+          addEventListener: (_name, listener) => {
+            appStateListener = listener;
+            return { remove() {} };
+          },
+        },
+      },
       "@/hooks/useDeviceVolume": {
         useDeviceVolume: () => ({
           volume: options.deviceVolume ?? null,
@@ -319,16 +348,36 @@ function audioHarness(options = {}) {
       },
       "@/lib/dj/pads": {},
       "@/lib/wake-info": {
-        onAudioInterruption: () => () => {},
+        onAudioInterruption: (listener) => {
+          interruptionListener = listener;
+          return () => {};
+        },
         deactivateAudioSession: async () => {},
       },
-      "@/lib/store": { getItem: () => null, setItem() {} },
+      "@/lib/player-memory": load("lib/player-memory.ts"),
+      "@/lib/store": {
+        getItem: key => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+        removeItem: key => storage.delete(key),
+      },
     },
     {
-      setInterval: () => 0,
-      clearInterval() {},
-      setTimeout: () => 0,
-      clearTimeout() {},
+      setInterval: (callback, delay) => {
+        const id = ++timerId;
+        intervals.set(id, { callback, delay });
+        return id;
+      },
+      clearInterval(id) {
+        intervals.delete(id);
+      },
+      setTimeout: (callback) => {
+        const id = ++timerId;
+        timeouts.set(id, callback);
+        return id;
+      },
+      clearTimeout(id) {
+        timeouts.delete(id);
+      },
       Date: class extends Date {
         static now() {
           return now;
@@ -343,6 +392,21 @@ function audioHarness(options = {}) {
     events,
     sources,
     nodes,
+    appState(state) {
+      appStateListener(state);
+    },
+    interrupt(event) {
+      interruptionListener(event);
+    },
+    watchdog() {
+      now += 6000;
+      for (const timer of intervals.values()) if (timer.delay === 6000) timer.callback();
+    },
+    flushTimeouts() {
+      const pending = [...timeouts.values()];
+      timeouts.clear();
+      pending.forEach((callback) => callback());
+    },
     tick(time) {
       now += 300;
       audioProps.onPositionChange(time);
@@ -622,6 +686,7 @@ test("drawer occupies the native screen, opens sections, and dismisses by backdr
   let back;
   let controls;
   let bodyReads = 0;
+  let logouts = 0;
   const navigations = [];
   const native = {
     View: "View",
@@ -685,11 +750,17 @@ test("drawer occupies the native screen, opens sections, and dismisses by backdr
       },
       "@/lib/cn": { cn: (...values) => values.filter(Boolean).join(" ") },
       "@/components/ui/icons": { Icon: "Icon" },
-      "@/components/ui/ConfirmDialog": { ConfirmDialog: () => null },
+      "@/components/ui/ConfirmDialog": { ConfirmDialog: "ConfirmDialog" },
       "@/components/features/music/EqBars": { EqBars: "EqBars" },
       "@/lib/format": { formatRuntime: () => "0:00" },
       "@/components/providers/AuthProvider": {
-        useAuth: () => ({ user: { name: "Listener" }, status: "authenticated" }),
+        useAuth: () => ({
+          user: { name: "Listener" },
+          status: "authenticated",
+          logout: async () => {
+            logouts++;
+          },
+        }),
       },
       "@/components/providers/GuestLockProvider": {
         useGuestLock: () => ({ requireAuth: () => true }),
@@ -771,6 +842,17 @@ test("drawer occupies the native screen, opens sections, and dismisses by backdr
   await act(() => section.props.onPress());
   assert.deepEqual(navigations, ["top"]);
   assert.equal(renderer.toJSON(), null);
+  await act(() => controls.setMobileNavOpen(true));
+  await act(() => renderer.root.findByProps({ accessibilityLabel: "Sign out" }).props.onPress());
+  assert.equal(logouts, 0, "tapping sign out only asks for confirmation");
+  assert.equal(controls.mobileNavOpen, false);
+  await act(() => renderer.root.findByProps({ title: "Sign out of ZYRAVA?" }).props.onCancel());
+  assert.equal(logouts, 0, "cancel keeps the account signed in");
+  assert.equal(renderer.toJSON(), null);
+  await act(() => controls.setMobileNavOpen(true));
+  await act(() => renderer.root.findByProps({ accessibilityLabel: "Sign out" }).props.onPress());
+  await act(() => renderer.root.findByProps({ title: "Sign out of ZYRAVA?" }).props.onConfirm());
+  assert.equal(logouts, 1, "only explicit confirmation logs out");
   await act(() => renderer.unmount());
 });
 
@@ -890,6 +972,7 @@ test("Expo Go keeps a buffering spinner when the transport still reports playing
 test("notification controls are idempotent and publish small artwork when large artwork is absent", async () => {
   const handlers = new Map();
   const shows = [];
+  const enabledControls = new Map();
   let fail = false;
   const notifications = {
     async show(info) {
@@ -897,7 +980,9 @@ test("notification controls are idempotent and publish small artwork when large 
       shows.push(info);
     },
     async hide() {},
-    async enableControl() {},
+    async enableControl(name, enabled) {
+      enabledControls.set(name, enabled);
+    },
     addEventListener(name, callback) {
       handlers.set(name, callback);
       return {
@@ -934,6 +1019,10 @@ test("notification controls are idempotent and publish small artwork when large 
       0
     )
   );
+  assert.equal(enabledControls.get("nextTrack"), true);
+  assert.equal(enabledControls.get("previousTrack"), true);
+  assert.equal(enabledControls.get("skipForward"), false);
+  assert.equal(enabledControls.get("skipBackward"), false);
   assert.equal(shows.at(-1).title, "Song");
   assert.deepEqual(shows.at(-1).artwork, { uri: "https://example.test/small.jpg" });
   await act(() => {
@@ -1458,4 +1547,184 @@ test("Expo Go reuses one effects player across Flat, EQ and Space and safely fal
   } finally {
     await h.unmount();
   }
+});
+
+test("background progress does not remount native audio or redraw the clock", async () => {
+  const h = audioHarness();
+  let controls, clock, renderer;
+  function Screen() {
+    controls = h.player.useMusicPlayer();
+    clock = h.player.usePlaybackProgress();
+    return null;
+  }
+  await act(() => {
+    renderer = create(
+      React.createElement(h.player.MusicPlayerProvider, null, React.createElement(Screen))
+    );
+  });
+  await act(() =>
+    controls.startQueue(
+      [
+        {
+          id: "background",
+          title: "Song",
+          duration: 180,
+          streamUrl: "https://example.test/song.mp3",
+        },
+      ],
+      "Test",
+      0
+    )
+  );
+  await act(() => h.tick(12));
+  await act(() => h.appState("background"));
+  await act(() => h.tick(13));
+  assert.equal(clock.progress, 12);
+  for (let i = 0; i < 4; i++) await act(() => h.watchdog());
+  assert.equal(h.instances.length, 1, "stale background ticks do not reload the source");
+  assert.equal(h.instances[0].playing, true);
+  await act(() => h.appState("active"));
+  assert.equal(clock.progress, 13, "foreground UI catches up to the latest audio position");
+  await act(() => renderer.unmount());
+});
+
+test("stream recovery resumes the latest position instead of the original zero", async () => {
+  const h = audioHarness();
+  let controls, renderer;
+  function Screen() {
+    controls = h.player.useMusicPlayer();
+    return null;
+  }
+  await act(() => {
+    renderer = create(
+      React.createElement(h.player.MusicPlayerProvider, null, React.createElement(Screen))
+    );
+  });
+  await act(() =>
+    controls.startQueue(
+      [{ id: "retry", title: "Song", duration: 180, streamUrl: "https://example.test/song.mp3" }],
+      "Test",
+      0
+    )
+  );
+  await act(() => h.tick(47));
+  await act(() => h.instances[0].props.onError(new Error("network interrupted")));
+  await act(() => h.flushTimeouts());
+  assert.equal(h.instances.length, 2);
+  assert.equal(h.instances.at(-1).position, 47);
+  assert.equal(h.instances.at(-1).playing, true);
+  await act(() => renderer.unmount());
+});
+
+test("a call suspends recovery until audio focus is returned", async () => {
+  const h = audioHarness();
+  let controls, renderer;
+  function Screen() {
+    controls = h.player.useMusicPlayer();
+    return null;
+  }
+  await act(() => {
+    renderer = create(
+      React.createElement(h.player.MusicPlayerProvider, null, React.createElement(Screen))
+    );
+  });
+  await act(() =>
+    controls.startQueue(
+      [{ id: "focus", title: "Song", duration: 180, streamUrl: "https://example.test/song.mp3" }],
+      "Test",
+      0
+    )
+  );
+  await act(() => h.tick(10));
+  await act(() => h.interrupt({ type: "began", shouldResume: false }));
+  await act(() => {
+    h.flushTimeouts();
+    h.watchdog();
+  });
+  assert.equal(h.instances[0].playing, false);
+  await act(() => h.interrupt({ type: "ended", shouldResume: true }));
+  await act(() => h.flushTimeouts());
+  assert.equal(h.instances[0].playing, true);
+  await act(() => renderer.unmount());
+});
+
+test("a paused native track can advance to a playing next track", async () => {
+  const h = audioHarness();
+  let controls, renderer;
+  function Screen() {
+    controls = h.player.useMusicPlayer();
+    return null;
+  }
+  await act(() => {
+    renderer = create(
+      React.createElement(h.player.MusicPlayerProvider, null, React.createElement(Screen))
+    );
+  });
+  const songs = [1, 2].map((id) => ({
+    id: String(id),
+    title: "Song",
+    duration: 180,
+    streamUrl: `https://example.test/${id}.mp3`,
+  }));
+  await act(() => controls.startQueue(songs, "Test", 0));
+  await act(() => controls.togglePlay());
+  assert.equal(h.instances[0].playing, false);
+  await act(() => controls.stepTrack(1));
+  assert.equal(h.instances.at(-1).playing, true);
+  await act(() => renderer.unmount());
+});
+
+test("background queue extension advances without waiting for UI frames", async () => {
+  const h = audioHarness();
+  let controls, renderer;
+  function Screen() {
+    controls = h.player.useMusicPlayer();
+    return null;
+  }
+  await act(() => {
+    renderer = create(
+      React.createElement(h.player.MusicPlayerProvider, null, React.createElement(Screen))
+    );
+  });
+  const songs = [1, 2].map((id) => ({
+    id: String(id),
+    title: "Song",
+    duration: 180,
+    streamUrl: `https://example.test/${id}.mp3`,
+  }));
+  await act(() => controls.startQueue([songs[0]], "Test", 0));
+  await act(() => controls.setQueueEnd(() => true));
+  await act(() => h.appState("background"));
+  await act(() => h.instances[0].props.onEnded());
+  await act(() => controls.appendQueue([songs[1]]));
+  assert.equal(controls.current.id, "2");
+  assert.equal(h.instances.at(-1).playing, true);
+  await act(() => renderer.unmount());
+});
+
+test("last played card restores paused at its saved position and logout clears it", async () => {
+  const { LAST_PLAYED_KEY, serializeLastPlayed } = load("lib/player-memory.ts");
+  const song = { id: "remembered", title: "Last played", artist: "Artist", album: "", year: "", language: "english", image: "", imageLarge: "", streamUrl: "https://example.test/last.mp3", pageUrl: "", duration: 180 };
+  const storage = new Map([[LAST_PLAYED_KEY, serializeLastPlayed(song, 45)]]);
+  const h = audioHarness({ storage });
+  let controls;
+  let progress;
+  function Screen() {
+    controls = h.player.useMusicPlayer();
+    progress = h.player.usePlaybackProgress().progress;
+    return null;
+  }
+  let renderer;
+  await act(() => { renderer = create(React.createElement(h.player.MusicPlayerProvider, null, React.createElement(Screen))); });
+  await act(() => h.flushTimeouts());
+  assert.equal(controls.current.id, song.id);
+  assert.equal(controls.playing, false);
+  assert.equal(progress, 45);
+  assert.ok(h.events.some(event => event[0] === "seek" && event[1] === 45));
+  assert.ok(!h.events.some(event => event[0] === "play"));
+  await act(() => controls.endSession());
+  await act(() => h.flushTimeouts());
+  assert.equal(controls.current, null);
+  assert.equal(storage.has(LAST_PLAYED_KEY), false);
+  await act(() => renderer.unmount());
 });

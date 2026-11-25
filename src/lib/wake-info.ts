@@ -4,9 +4,9 @@
  * dropped because native audio sessions already survive).
  *
  * On native, react-native-audio-api's `AudioManager` owns that job: the
- * session must be activated for playback to hold the screen awake and keep
- * the audio route, and the system interrupts it for calls or when another
- * app takes over. The player provider is the only consumer of these three
+ * iOS session selects the playback route; Android's media foreground service
+ * is owned by PlaybackNotificationManager. Neither keeps the screen awake.
+ * The system can interrupt playback for calls or another app. The player provider is the only consumer of these three
  * calls, so the whole wrapper stays deliberately tiny.
  */
 

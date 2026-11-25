@@ -108,7 +108,7 @@ export function RegionCarousel({
                 <View className="flex-row items-center gap-2">
                   <Icon name="music" className="size-3.5" color="rgba(255,255,255,0.7)" />
                   <Text className="text-[10px] font-semibold uppercase tracking-[2.5px] text-white/70">
-                    Now in rotation · {region.hint}
+                    Now in rotation{region.hint ? ` · ${region.hint}` : ""}
                   </Text>
                 </View>
                 <Text

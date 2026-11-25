@@ -164,6 +164,7 @@ export async function apiFetch<T>(path: string, options: ApiOptions = {}): Promi
     if (response.status === 401 && options.auth !== false) {
       const refreshed = await refreshSession();
       if (refreshed) return apiFetch<T>(path, { ...options, retried: true });
+      reportSessionExpired();
     }
   }
 
@@ -255,4 +256,16 @@ export async function logoutRequest(): Promise<void> {
   } finally {
     setAccessToken(null);
   }
+}
+
+const expiredListeners = new Set<() => void>();
+export function subscribeSessionExpired(listener: () => void) {
+  expiredListeners.add(listener);
+  return () => {
+    expiredListeners.delete(listener);
+  };
+}
+function reportSessionExpired() {
+  setAccessToken(null);
+  expiredListeners.forEach((listener) => listener());
 }

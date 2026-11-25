@@ -77,6 +77,8 @@ export function CollectionHero({
           ) : (
             <Icon
               name={glyph}
+              color={glyph === "heart" ? "#ff0000" : undefined}
+              fill={glyph === "heart" ? "#ff0000" : undefined}
               className={cn(
                 "absolute left-1/2 top-1/2 size-9 -translate-x-1/2 -translate-y-1/2",
                 tone === "brand" ? "text-brand" : "text-faint-foreground"

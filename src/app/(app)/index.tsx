@@ -1,3 +1,4 @@
+import { SupportTab } from "@/components/features/customization/SupportTab";
 import { useCustomization } from "@/components/providers/CustomizationProvider";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { CustomizationConsole } from "@/components/features/customization/CustomizationConsole";
@@ -13,6 +14,7 @@ import {
   type ScrollViewInstance,
 } from "react-native";
 import { Image } from "expo-image";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams } from "expo-router";
 import type { JSX } from "react";
 
@@ -49,6 +51,9 @@ import { useMusicPlayer } from "@/components/providers/MusicPlayerProvider";
 import { useLibrary } from "@/components/providers/LibraryProvider";
 import { useOffline } from "@/components/providers/OfflineProvider";
 import { rankSongs } from "@/lib/recommend";
+import { mixFeedPools, pickFreshTrending, readMixHistory, MIX_HISTORY_KEY } from "@/lib/feed-mix";
+import { getTrendingMix } from "@/lib/trending-mix";
+import { getItem, setItem } from "@/lib/store";
 import {
   dedupeSongs,
   searchSongs,
@@ -134,7 +139,8 @@ export default function MusicPage(): JSX.Element {
     if (!HOME_TABS.some((entry) => entry.value === asked)) return;
     const wanted = asked as HomeTab;
     if (isGuest && wanted !== "songs") return;
-    if (personal && (wanted === "customize" || wanted === "payments")) return;
+    if (personal && (wanted === "customize" || wanted === "payments" || wanted === "support"))
+      return;
     const timer = setTimeout(() => setHomeTab(wanted), 0);
     return () => clearTimeout(timer);
   }, [isGuest, params.tab, params.visit, personal]);
@@ -238,7 +244,8 @@ export default function MusicPage(): JSX.Element {
   const openTab = useCallback(
     (value: HomeTab) => {
       if (value !== "songs" && !requireAuth("tab")) return;
-      if (personal && (value === "customize" || value === "payments")) return;
+      if (personal && (value === "customize" || value === "payments" || value === "support"))
+        return;
       setHomeTab(value);
       if (value === "offline" && !locals.length) setImportOpen(true);
     },
@@ -302,7 +309,11 @@ export default function MusicPage(): JSX.Element {
   /** Toggles a language chip — any change resets the page counter. */
   const toggleLang = (label: string) => {
     setSelectedLangs((prev) =>
-      prev.includes(label) ? prev.filter((value) => value !== label) : [...prev, label]
+      label === "Mix"
+        ? ["Mix"]
+        : prev.includes(label)
+          ? prev.filter((value) => value !== label)
+          : [...prev.filter((value) => value !== "Mix"), label]
     );
     setBatch(0);
   };
@@ -345,13 +356,18 @@ export default function MusicPage(): JSX.Element {
   const playRegionNow = async (label: string): Promise<void> => {
     const region = REGIONS.find((candidate) => candidate.label === label);
     if (!region) return;
-    setTerm(label);
-    setBatch(0);
+    openRegion(label);
     try {
       // A day-shifted page: pressing play on the carousel opens today's set,
       // not yesterday's opening track.
-      const result = await searchSongs(region.queries[0], PAGE_SIZE, 1 + (carouselDay % 9));
-      const fresh = (result.songs ?? []).slice();
+      const [results, trendingSongs] = await Promise.all([
+        Promise.all(region.queries.map((query) => searchSongs(query, PAGE_SIZE, 1 + (carouselDay % 9)))),
+        label === "Mix" ? getTrendingMix() : Promise.resolve([] as Song[]),
+      ]);
+      const pools = results.map((result) => result.songs ?? []);
+      const chartPicks = pickFreshTrending(trendingSongs, readMixHistory(getItem(MIX_HISTORY_KEY)), PAGE_SIZE);
+      if (chartPicks.length) setItem(MIX_HISTORY_KEY, JSON.stringify(chartPicks.map(song => song.id)));
+      const fresh = dedupeSongs([...chartPicks, ...(label === "Mix" ? mixFeedPools(pools) : pools.flat())]).slice(0, PAGE_SIZE);
       if (fresh.length) {
         // The carousel's own first page is not the ranked list below, so it
         // does not join the chain.
@@ -441,13 +457,15 @@ export default function MusicPage(): JSX.Element {
         for (const vibe of activeVibes) {
           // Rooted in the first selected language first, then an open angle,
           // then the remaining languages rooted — all one page deep each.
-          const angles: string[] = [
-            `${activeRegions[0].label.toLowerCase()} ${vibe.queries[0]}`,
-            vibe.queries[1] ?? vibe.queries[0],
-            ...activeRegions
-              .slice(1)
-              .map((candidate) => `${candidate.label.toLowerCase()} ${vibe.queries[0]}`),
-          ];
+          const angles: string[] = activeRegions.some((region) => region.label === "Mix")
+            ? vibe.queries
+            : [
+                `${activeRegions[0].label.toLowerCase()} ${vibe.queries[0]}`,
+                vibe.queries[1] ?? vibe.queries[0],
+                ...activeRegions
+                  .slice(1)
+                  .map((candidate) => `${candidate.label.toLowerCase()} ${vibe.queries[0]}`),
+              ];
           for (const query of angles.slice(0, 6)) {
             combos.push({ query, page: firstPage + batch });
           }
@@ -465,9 +483,12 @@ export default function MusicPage(): JSX.Element {
         });
     };
 
-    // Pages load in parallel; failed ones simply contribute no tracks.
-    Promise.all(combos.map(({ query, page }) => fetchPage(query, page)))
-      .then((responses) => {
+    const trendingFirst = !freeText && batch === 0 && activeVibes.length === 0 &&
+      activeRegions.some((region) => region.label === "Mix");
+    const trends = trendingFirst ? getTrendingMix() : Promise.resolve([] as Song[]);
+    // Keep the discovery pool available if any chart service is unavailable.
+    Promise.all([Promise.all(combos.map(({ query, page }) => fetchPage(query, page))), trends])
+      .then(([responses, trendingSongs]) => {
         if (requestRef.current !== requestId) return;
 
         /** One deduped list per combo, in combo order for interleaving. */
@@ -491,7 +512,7 @@ export default function MusicPage(): JSX.Element {
           }
         });
 
-        if (!usableByPosition.some((list) => list.length > 0) && failure) {
+        if (!trendingSongs.length && !usableByPosition.some((list) => list.length > 0) && failure) {
           throw new Error(failure);
         }
 
@@ -503,11 +524,20 @@ export default function MusicPage(): JSX.Element {
               (candidate) => candidate.label
             )
           : activeRegions.map((candidate) => candidate.label);
-        const selected = rankSongs(dedupeSongs(usableByPosition.flat()), {
+        const isMix = !freeText && activeRegions.some((region) => region.label === "Mix");
+        const pooled = isMix ? mixFeedPools(usableByPosition) : usableByPosition.flat();
+        const discovery = rankSongs(dedupeSongs(pooled), {
           query: freeText,
           vibes: activeVibes,
-          regionLabels,
-        }).slice(0, pageSize);
+          regionLabels: isMix ? [] : regionLabels,
+        });
+        let recent: string[] = [];
+        try { recent = readMixHistory(getItem(MIX_HISTORY_KEY)); } catch { /* storage unavailable */ }
+        const freshTrends = pickFreshTrending(trendingSongs, recent, pageSize);
+        if (freshTrends.length) {
+          try { setItem(MIX_HISTORY_KEY, JSON.stringify(freshTrends.map(song => song.id))); } catch { /* storage unavailable */ }
+        }
+        const selected = dedupeSongs([...freshTrends, ...discovery]).slice(0, pageSize);
 
         // The catalogue had nothing at this visit's opening spot — fall back
         // to its first page rather than showing an empty feed.
@@ -521,7 +551,7 @@ export default function MusicPage(): JSX.Element {
             response && "total" in response && typeof response.total === "number"
               ? Math.max(sum, response.total)
               : sum,
-          0
+          trendingSongs.length ? (firstPage - 1) * pageSize + trendingSongs.length : 0
         );
 
         setLibrary((prev) =>
@@ -651,7 +681,7 @@ export default function MusicPage(): JSX.Element {
       : activeRegions.length > 1
         ? "Multi-language mix"
         : isRegion
-          ? activeRegions[0].hint
+          ? activeRegions[0].hint || activeRegions[0].label
           : "Search results";
 
   /** Queue the visible page and hand that run to the page chain. */
@@ -729,7 +759,8 @@ export default function MusicPage(): JSX.Element {
             <Pressable
               onPress={() => setMobileNavOpen(true)}
               accessibilityLabel="Open the dock"
-              className="size-10 flex-none items-center justify-center rounded-xl border border-separator bg-surface shadow-field"
+              accessibilityRole="button"
+              className="size-11 flex-none items-center justify-center rounded-xl border border-separator bg-surface shadow-field"
             >
               <Icon name="menu" className="size-5" />
             </Pressable>
@@ -765,7 +796,9 @@ export default function MusicPage(): JSX.Element {
 
   return (
     <View className="flex-1 bg-background">
-      <View className="px-4 pt-4">{pageHeader}</View>
+      <SafeAreaView edges={["top", "left", "right"]}>
+        <View className="px-4 pt-4">{pageHeader}</View>
+      </SafeAreaView>
       <HomeTabPanel active={homeTab === "songs"}>
         <ScrollView
           ref={scrollRef}
@@ -912,7 +945,7 @@ export default function MusicPage(): JSX.Element {
                         <Text className="truncate text-sm font-bold text-white">
                           {candidate.label}
                         </Text>
-                        <Text className="truncate text-[11px] text-white/80">{candidate.hint}</Text>
+                        {candidate.hint ? <Text className="truncate text-[11px] text-white/80">{candidate.hint}</Text> : null}
                       </View>
                     </Pressable>
                   );
@@ -1014,11 +1047,6 @@ export default function MusicPage(): JSX.Element {
                     className="text-xl font-semibold text-foreground"
                   >
                     {libraryTitle}
-                  </Text>
-                  <Text className="mt-1 text-xs text-muted">
-                    {listLoading
-                      ? "Loading tracks…"
-                      : `${library.total.toLocaleString("en-IN")} tracks${pageCount > 1 ? ` · Page ${batch + 1} of ${pageCount}` : ""}`}
                   </Text>
                 </View>
                 {fetching ? <Spinner /> : null}
@@ -1126,7 +1154,8 @@ export default function MusicPage(): JSX.Element {
                                 <Icon
                                   name="heart"
                                   className="size-4"
-                                  color={isLiked(song) ? "var(--danger)" : "var(--muted)"}
+                                  color={isLiked(song) ? "#ff0000" : "var(--muted)"}
+                                  fill={isLiked(song) ? "#ff0000" : "none"}
                                 />
                               </Pressable>
                               <Pressable
@@ -1159,7 +1188,8 @@ export default function MusicPage(): JSX.Element {
                               <Icon
                                 name="heart"
                                 className="size-4"
-                                color={isLiked(song) ? "var(--danger)" : "rgba(255,255,255,0.85)"}
+                                color={isLiked(song) ? "#ff0000" : "rgba(255,255,255,0.85)"}
+                                fill={isLiked(song) ? "#ff0000" : "none"}
                               />
                             </Pressable>
                             <Pressable
@@ -1293,7 +1323,14 @@ export default function MusicPage(): JSX.Element {
           {!personal ? (
             <>
               <HomeTabPanel active={homeTab === "customize"}>
-                <CustomizationConsole key={user?.id} active={homeTab === "customize"} />
+                <CustomizationConsole
+                  key={user?.id}
+                  active={homeTab === "customize"}
+                  onSupport={() => openTab("support")}
+                />
+              </HomeTabPanel>
+              <HomeTabPanel active={homeTab === "support"}>
+                <SupportTab key={user?.id} onHistory={() => openTab("payments")} />
               </HomeTabPanel>
               <HomeTabPanel active={homeTab === "payments"}>
                 <PaymentsHistory key={user?.id} />

@@ -18,6 +18,7 @@ function harness() {
     navigation: { key: "root" },
   };
   const navigations = [];
+  const keyboardListeners = new Map();
   const timers = new Map();
   const modules = new Map();
   const router = {
@@ -32,6 +33,16 @@ function harness() {
       Pressable: "Pressable",
       ScrollView: "ScrollView",
       KeyboardAvoidingView: "KeyboardAvoidingView",
+      Keyboard: {
+        metrics: () => state.keyboardMetrics,
+        dismiss: () => {
+          state.keyboardMetrics = undefined;
+        },
+        addListener: (name, callback) => {
+          keyboardListeners.set(name, callback);
+          return { remove: () => keyboardListeners.delete(name) };
+        },
+      },
       Platform: { OS: "android" },
       Dimensions: { get: () => ({ width: 390, height: 844 }) },
       StyleSheet: {
@@ -85,7 +96,9 @@ function harness() {
     "@/components/ui/Input": { Input: "Input" },
     "@/components/ui/icons": { Icon: "Icon" },
     "@/components/auth/TrendingCarousel": { TrendingCarousel: "TrendingCarousel" },
-    "@/lib/api": { ApiError: class ApiError extends Error {} },
+    "@/lib/api": {
+      ApiError: class ApiError extends Error {},
+    },
     "@/lib/store": { getItem: () => null, setItem: () => {} },
     "@/lib/cn": { cn: (...values) => values.filter(Boolean).join(" ") },
   };
@@ -125,7 +138,7 @@ function harness() {
     );
     return module.exports;
   }
-  return { load, state, navigations, timers };
+  return { load, state, navigations, timers, keyboardListeners };
 }
 
 test("sign-in paints a full-height native screen with fields", async () => {
@@ -288,4 +301,129 @@ test("the guest sign-in dialog unmounts its portal on account routes", async () 
   assert.equal(renderer.root.findAllByType("Modal").length, 0);
   assert.equal(renderer.root.findAllByType("Navigator").length, 1);
   await act(async () => renderer.unmount());
+});
+
+for (const mode of ["login", "register"]) {
+  for (const resized of [false, true]) {
+    test(`${mode} keeps inputs above an ${resized ? "already resized" : "overlay"} keyboard`, async () => {
+      const { load, keyboardListeners } = harness();
+      const { AuthScreen } = load("components/auth/AuthScreen.tsx");
+      const scrolls = [];
+      let offset = 0;
+      let viewportHeight = 700;
+      let renderer;
+      await act(() => {
+        renderer = create(React.createElement(AuthScreen, { mode }), {
+          createNodeMock: (element) => {
+            if (element.type === "View" && element.props.collapsable === false) {
+              return { measureInWindow: (cb) => cb(0, 100, 390, viewportHeight) };
+            }
+            if (element.type === "Input") {
+              return { measureInWindow: (cb) => cb(20, 700 - offset, 350, 48) };
+            }
+            if (element.type === "ScrollView") {
+              return {
+                scrollTo: ({ y }) => {
+                  scrolls.push(y);
+                  offset = y;
+                  renderer.root.findByType("ScrollView").props.onScroll({
+                    nativeEvent: { contentOffset: { y } },
+                  });
+                },
+              };
+            }
+            return null;
+          },
+        });
+      });
+      const password = renderer.root.findAllByType("Input").at(-1);
+      await act(() => password.props.onFocus());
+      assert.equal(scrolls.length, 0, "wait for actual keyboard geometry");
+      if (resized) viewportHeight = 400;
+      await act(() =>
+        keyboardListeners.get("keyboardDidShow")({ endCoordinates: { screenY: 500 } })
+      );
+      await act(() => renderer.root.findByType("ScrollView").props.onContentSizeChange());
+      assert.deepEqual(
+        scrolls,
+        [272],
+        "input bottom is 24px above the keyboard; no repeat scrolling"
+      );
+      assert.equal(
+        renderer.root.findByType("ScrollView").props.contentContainerStyle[1].paddingBottom,
+        resized ? 32 : 332,
+        "reserve only the keyboard overlap"
+      );
+      // Switching fields while the keyboard is open must reveal the new field too.
+      await act(() => password.props.onBlur());
+      offset = 0;
+      await act(() =>
+        renderer.root
+          .findByType("ScrollView")
+          .props.onScroll({ nativeEvent: { contentOffset: { y: 0 } } })
+      );
+      await act(() => renderer.root.findAllByType("Input")[0].props.onFocus());
+      assert.deepEqual(scrolls, [272, 272]);
+      await act(() =>
+        keyboardListeners.get("keyboardDidShow")({ endCoordinates: { screenY: 420 } })
+      );
+      assert.equal(offset, 352, "keyboard height changes preserve clearance");
+      await act(() => renderer.root.findAllByType("Input")[0].props.onBlur());
+      await act(() =>
+        keyboardListeners.get("keyboardDidShow")({ endCoordinates: { screenY: 400 } })
+      );
+      assert.equal(scrolls.length, 3, "do not restore blurred inputs");
+      await act(() => keyboardListeners.get("keyboardDidHide")());
+      assert.equal(
+        renderer.root.findByType("ScrollView").props.contentContainerStyle[1].paddingBottom,
+        32
+      );
+      await act(() => renderer.unmount());
+      assert.equal(keyboardListeners.size, 0);
+    });
+  }
+}
+
+test("registration handles an already-open keyboard and retries a scroll clamped during layout", async () => {
+  const { load, state, timers } = harness();
+  state.keyboardMetrics = { screenY: 500 };
+  const { AuthScreen } = load("components/auth/AuthScreen.tsx");
+  let offset = 0;
+  let layoutReady = false;
+  let renderer;
+  const scrolls = [];
+  await act(() => {
+    renderer = create(React.createElement(AuthScreen, { mode: "register" }), {
+      createNodeMock: (element) => {
+        if (element.type === "View" && element.props.collapsable === false)
+          return { measureInWindow: (cb) => cb(0, 100, 390, 700) };
+        if (element.type === "Input")
+          return { measureInWindow: (cb) => cb(20, 700 - offset, 350, 48) };
+        if (element.type === "ScrollView")
+          return {
+            scrollTo: ({ y }) => {
+              scrolls.push(y);
+              offset = layoutReady ? y : 0;
+              renderer.root.findByType("ScrollView").props.onScroll({
+                nativeEvent: { contentOffset: { y: offset } },
+              });
+            },
+          };
+        return null;
+      },
+    });
+  });
+  const inputs = renderer.root.findAllByType("Input");
+  await act(() => inputs[0].props.onFocus());
+  assert.equal(scrolls.at(-1), 272, "focus reads the keyboard without a didShow event");
+  assert.equal(offset, 0, "native scroll initially clamped before layout completes");
+  await act(() => inputs.at(-1).props.onFocus());
+  await act(() => inputs[0].props.onBlur());
+  layoutReady = true;
+  const retry = [...timers.values()].find(({ delay }) => delay === 350);
+  assert.ok(retry, "late blur of the old field must not cancel the new field's retry");
+  await act(() => retry.callback());
+  assert.equal(offset, 272, "password becomes visible after native layout settles");
+  await act(() => renderer.unmount());
+  assert.equal(timers.size, 0, "pending work is cancelled on leaving registration");
 });

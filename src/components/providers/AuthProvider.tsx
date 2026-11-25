@@ -10,6 +10,7 @@ import {
 import { getItem, setItem } from "@/lib/store";
 import {
   loginRequest,
+  subscribeSessionExpired,
   logoutRequest,
   refreshSession,
   registerRequest,
@@ -86,6 +87,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       alive = false;
     };
   }, []);
+
+  useEffect(
+    () =>
+      subscribeSessionExpired(() => {
+        setUser(null);
+        setStatus("anonymous");
+        setExpired(true);
+      }),
+    []
+  );
 
   const login = useCallback(async (input: LoginInput) => {
     const nextUser = await loginRequest(input);

@@ -1,14 +1,16 @@
 import { Animation } from "@/components/ui/Animation";
 import { useCustomization } from "@/components/providers/CustomizationProvider";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ComponentRef } from "react";
 import {
-  KeyboardAvoidingView,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   View,
+  type KeyboardEvent,
+  type TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter, type Href } from "expo-router";
@@ -70,6 +72,92 @@ export function AuthScreen({
   initialSlides?: TrendingSlide[];
 }) {
   const router = useRouter();
+  const scrollRef = useRef<ComponentRef<typeof ScrollView>>(null);
+  const viewportRef = useRef<ComponentRef<typeof View>>(null);
+  const inputRefs = useRef<Record<string, ComponentRef<typeof TextInput> | null>>({});
+  const focusedField = useRef<string | null>(null);
+  const keyboardTop = useRef<number | null>(Keyboard.metrics()?.screenY ?? null);
+  const scrollOffset = useRef(0);
+  const [keyboardInset, setKeyboardInset] = useState(0);
+  const revealFocusedInput = useCallback(() => {
+    viewportRef.current?.measureInWindow((_x, viewportTop, _width, viewportHeight) => {
+      const top = keyboardTop.current;
+      // Android can resize the window OR overlay it. Only reserve the overlap,
+      // so a resized window never gets a second keyboard-sized empty space.
+      const overlap = top === null ? 0 : Math.max(0, viewportTop + viewportHeight - top);
+      setKeyboardInset(overlap);
+      const field = focusedField.current;
+      const input = field ? inputRefs.current[field] : null;
+      if (!input || top === null || viewportHeight <= 0) return;
+      input.measureInWindow((_inputX, inputTop, _inputWidth, inputHeight) => {
+        if (focusedField.current !== field || keyboardTop.current !== top || inputHeight <= 0)
+          return;
+        const visibleBottom = Math.min(viewportTop + viewportHeight, top) - 24;
+        const visibleTop = viewportTop + 12;
+        const delta =
+          inputTop + inputHeight > visibleBottom
+            ? inputTop + inputHeight - visibleBottom
+            : inputTop < visibleTop
+              ? inputTop - visibleTop
+              : 0;
+        if (Math.abs(delta) > 1) {
+          // Native layout/keyboard transitions already animate. Avoid overlapping
+          // animated scroll commands when the keyboard and content resize together.
+          scrollRef.current?.scrollTo({
+            y: Math.max(0, scrollOffset.current + delta),
+            animated: false,
+          });
+        }
+      });
+    });
+  }, []);
+  const revealTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const clearRevealTimers = useCallback(() => {
+    revealTimers.current.forEach(clearTimeout);
+    revealTimers.current = [];
+  }, []);
+  const scheduleReveal = useCallback(() => {
+    clearRevealTimers();
+    revealFocusedInput();
+    // Navigation, secure-entry keyboard changes and the new bottom padding can
+    // finish after focus/show. Retry against the committed native layout; the
+    // first scroll can otherwise be clamped to the old content height.
+    revealTimers.current = [100, 350].map((delay) => setTimeout(revealFocusedInput, delay));
+  }, [clearRevealTimers, revealFocusedInput]);
+  const focusInput = (field: string) => {
+    focusedField.current = field;
+    // A keyboard already open on the previous auth route does not emit another
+    // didShow event when this route mounts or a different field takes focus.
+    keyboardTop.current = Keyboard.metrics()?.screenY ?? keyboardTop.current;
+    scheduleReveal();
+  };
+  const blurInput = (field: string) => {
+    if (focusedField.current === field) {
+      focusedField.current = null;
+      clearRevealTimers();
+    }
+  };
+  useEffect(() => {
+    const show = (event: KeyboardEvent) => {
+      keyboardTop.current = event.endCoordinates.screenY;
+      scheduleReveal();
+    };
+    const hide = () => {
+      clearRevealTimers();
+      keyboardTop.current = null;
+      setKeyboardInset(0);
+    };
+    const subscriptions = [
+      Keyboard.addListener("keyboardDidShow", show),
+      Keyboard.addListener("keyboardDidHide", hide),
+      ...(Platform.OS === "ios" ? [Keyboard.addListener("keyboardWillChangeFrame", show)] : []),
+    ];
+    scheduleReveal();
+    return () => {
+      clearRevealTimers();
+      subscriptions.forEach((subscription) => subscription.remove());
+    };
+  }, [clearRevealTimers, scheduleReveal]);
   const { welcome } = useCustomization();
   const { status, login, register } = useAuth();
   const isRegister = mode === "register";
@@ -195,10 +283,7 @@ export function AuthScreen({
         accessibilityElementsHidden={busy || status === "loading"}
         importantForAccessibility={busy || status === "loading" ? "no-hide-descendants" : "auto"}
       >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-        >
+        <View style={{ flex: 1 }}>
           {/* Header row — brand and the studio line, as on the web column. */}
           <View className="flex-row items-center justify-between gap-3 px-5 pt-6 pb-2">
             <View className="flex-row items-center gap-2">
@@ -217,258 +302,307 @@ export function AuthScreen({
             </Text>
           </View>
 
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.scroller}>
-            {/* The mobile variant's trending card sits above the form. */}
-            <View className="w-full max-w-sm self-center pb-7">
-              {personalWelcome ? (
-                <View
-                  style={{
-                    backgroundColor: welcome.config.surface,
-                    borderRadius: 24,
-                    padding: 20,
-                    alignItems: "center",
-                  }}
-                >
-                  <Animation id="personal-header" style={{ width: 240, height: 180 }} />
-                  <Text style={{ color: welcome.config.text, fontSize: 22, fontWeight: "700" }}>
-                    Welcome back, Baava
-                  </Text>
-                  <Text
+          <View ref={viewportRef} collapsable={false} style={{ flex: 1 }} onLayout={scheduleReveal}>
+            <ScrollView
+              ref={scrollRef}
+              style={{ flex: 1 }}
+              onContentSizeChange={scheduleReveal}
+              onScroll={(event) => {
+                scrollOffset.current = event.nativeEvent.contentOffset.y;
+              }}
+              scrollEventThrottle={16}
+              automaticallyAdjustKeyboardInsets={false}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
+              contentContainerStyle={[styles.scroller, { paddingBottom: 32 + keyboardInset }]}
+            >
+              {/* The mobile variant's trending card sits above the form. */}
+              <View className="w-full max-w-sm self-center pb-7">
+                {personalWelcome ? (
+                  <View
                     style={{
-                      color: welcome.config.accent,
-                      fontSize: 12,
-                      textAlign: "center",
-                      marginTop: 12,
+                      backgroundColor: welcome.config.surface,
+                      borderRadius: 24,
+                      padding: 20,
+                      alignItems: "center",
                     }}
                   >
-                    Crafted with love for Vimitha — my Baava.
-                  </Text>
-                </View>
-              ) : (
-                <TrendingCarousel initialSlides={initialSlides} />
-              )}
-            </View>
-
-            <View className="w-full max-w-sm self-center py-10">
-              <Text className="text-[10px] font-semibold uppercase tracking-[1.8px] text-brand">
-                {isRegister ? "Create your account" : "Welcome back"}
-              </Text>
-              <Text className="mt-2 text-[2rem] font-bold leading-[35px] tracking-[-0.8px] text-foreground">
-                {isRegister ? "Join the studio." : "Sign in to ZYRAVA."}
-              </Text>
-              <Text className="mt-2 text-sm text-muted" style={{ lineHeight: 20 }}>
-                {isRegister
-                  ? "One account for your queue, saved mixes and the console."
-                  : "Your queue and saved mixes are waiting."}
-              </Text>
-
-              <View className="mt-7 gap-4">
-                {isRegister ? (
-                  <>
-                    {/* Register: which credential opens the account. */}
-                    <View className="flex-row gap-1 rounded-xl border border-separator bg-surface p-1">
-                      {(["email", "phone"] as const).map((option) => (
-                        <Pressable
-                          key={option}
-                          onPress={() => {
-                            setMethod(option);
-                            setErrors({});
-                          }}
-                          accessibilityRole="button"
-                          accessibilityState={{ selected: method === option }}
-                          className={cn(
-                            "h-9 flex-1 flex-row items-center justify-center gap-2 rounded-lg text-xs font-semibold",
-                            method === option ? "bg-accent text-accent-foreground" : "text-muted"
-                          )}
-                        >
-                          {option === "email" ? (
-                            <Mail size={14} color={method === option ? accentForeground : muted} />
-                          ) : (
-                            <Phone size={14} color={method === option ? accentForeground : muted} />
-                          )}
-                          <Text
-                            style={{
-                              color: method === option ? accentForeground : muted,
-                              fontSize: 12,
-                              fontWeight: "600",
-                            }}
-                          >
-                            {option === "email" ? "Email" : "Phone"}
-                          </Text>
-                        </Pressable>
-                      ))}
-                    </View>
-
-                    <View className="gap-1.5">
-                      {label("Name", "(optional)")}
-                      <View className="relative">
-                        <View pointerEvents="none" style={styles.leadingIcon}>
-                          <User size={16} color={muted} />
-                        </View>
-                        <Input
-                          type="text"
-                          value={name}
-                          onChange={(event) => setName(event.target.value)}
-                          autoComplete="name"
-                          placeholder="Your name"
-                          className="h-11 w-full rounded-xl ps-10"
-                          aria-invalid={Boolean(errors.name)}
-                        />
-                      </View>
-                      {fieldError("name")}
-                    </View>
-
-                    {method === "email" ? (
-                      <View className="gap-1.5">
-                        {label("Email")}
-                        <View className="relative">
-                          <View pointerEvents="none" style={styles.leadingIcon}>
-                            <Mail size={16} color={muted} />
-                          </View>
-                          <Input
-                            type="email"
-                            value={email}
-                            onChange={(event) => setEmail(event.target.value)}
-                            autoComplete="email"
-                            placeholder="you@example.com"
-                            className="h-11 w-full rounded-xl ps-10"
-                            aria-invalid={Boolean(errors.email)}
-                          />
-                        </View>
-                        {fieldError("email")}
-                      </View>
-                    ) : (
-                      <View className="gap-1.5">
-                        {label("Phone number")}
-                        <View className="relative">
-                          <View pointerEvents="none" style={styles.leadingIcon}>
-                            <Phone size={16} color={muted} />
-                          </View>
-                          <Input
-                            type="tel"
-                            value={phone}
-                            onChange={(event) => setPhone(event.target.value)}
-                            autoComplete="tel"
-                            placeholder="+91 98765 43210"
-                            className="h-11 w-full rounded-xl ps-10"
-                            aria-invalid={Boolean(errors.phone)}
-                          />
-                        </View>
-                        {fieldError("phone")}
-                      </View>
-                    )}
-                  </>
-                ) : (
-                  <View className="gap-1.5">
-                    {label("Email or phone")}
-                    <View className="relative">
-                      <View pointerEvents="none" style={styles.leadingIcon}>
-                        <Mail size={16} color={muted} />
-                      </View>
-                      <Input
-                        type="text"
-                        value={identifier}
-                        onChange={(event) => setIdentifier(event.target.value)}
-                        autoComplete="username"
-                        placeholder="you@example.com or +91…"
-                        className="h-11 w-full rounded-xl ps-10"
-                        aria-invalid={Boolean(errors.identifier)}
-                      />
-                    </View>
-                    {fieldError("identifier")}
-                  </View>
-                )}
-
-                <View className="gap-1.5">
-                  {label("Password")}
-                  <View className="relative">
-                    <View pointerEvents="none" style={styles.leadingIcon}>
-                      <Lock size={16} color={muted} />
-                    </View>
-                    <Input
-                      type={showPassword ? "text" : "password"}
-                      value={password}
-                      onChange={(event) => setPassword(event.target.value)}
-                      autoComplete={isRegister ? "new-password" : "current-password"}
-                      placeholder={isRegister ? "At least 8 characters" : "Your password"}
-                      className="h-11 w-full rounded-xl ps-10 pe-11"
-                      aria-invalid={Boolean(errors.password)}
-                      /* The native stand-in for pressing Enter in the web form. */
-                      returnKeyType="go"
-                      onSubmitEditing={() => void submit()}
-                    />
-                    <Pressable
-                      onPress={() => setShowPassword((visible) => !visible)}
-                      accessibilityRole="button"
-                      accessibilityLabel={showPassword ? "Hide password" : "Show password"}
-                      className="absolute end-1.5 size-8 items-center justify-center rounded-lg"
-                      style={{ top: 6 }}
+                    <Animation id="personal-header" style={{ width: 240, height: 180 }} />
+                    <Text style={{ color: welcome.config.text, fontSize: 22, fontWeight: "700" }}>
+                      Welcome back, Baava
+                    </Text>
+                    <Text
+                      style={{
+                        color: welcome.config.accent,
+                        fontSize: 12,
+                        textAlign: "center",
+                        marginTop: 12,
+                      }}
                     >
-                      {showPassword ? (
-                        <EyeOff size={16} color={muted} />
-                      ) : (
-                        <Eye size={16} color={muted} />
-                      )}
-                    </Pressable>
-                  </View>
-                  {fieldError("password")}
-                </View>
-
-                <Pressable
-                  onPress={() => setRemember((value) => !value)}
-                  accessibilityRole="checkbox"
-                  accessibilityState={{ checked: remember }}
-                  className="flex-row items-center gap-2.5 self-start"
-                >
-                  <View
-                    className={cn(
-                      "size-4 items-center justify-center border border-separator bg-surface",
-                      remember && "bg-accent"
-                    )}
-                  >
-                    {remember ? <Check size={12} color={accentForeground} strokeWidth={3} /> : null}
-                  </View>
-                  <Text className="text-xs font-medium text-muted">
-                    Remember me <Text className="text-faint-foreground">for 30 days</Text>
-                  </Text>
-                </Pressable>
-
-                {formError ? (
-                  <View
-                    accessibilityRole="alert"
-                    className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2"
-                  >
-                    <Text className="text-xs font-medium text-danger-soft-foreground">
-                      {formError}
+                      Crafted with love for Vimitha — my Baava.
                     </Text>
                   </View>
-                ) : null}
-
-                <ClickButton
-                  onPress={() => void submit()}
-                  loading={busy || status === "loading"}
-                  className="h-11 w-full rounded-none text-[13px] font-semibold"
-                >
-                  {busy || status === "loading"
-                    ? "One moment…"
-                    : isRegister
-                      ? "Create account"
-                      : "Sign in"}
-                </ClickButton>
+                ) : (
+                  <TrendingCarousel initialSlides={initialSlides} />
+                )}
               </View>
 
-              <Text className="mt-6 text-center text-xs text-muted">
-                {isRegister ? "Already have an account?" : "New to ZYRAVA?"}{" "}
-                <Text
-                  onPress={() => router.push(isRegister ? "/login" : "/register")}
-                  className="font-semibold text-brand"
-                >
-                  {isRegister ? "Sign in" : "Create one"}
+              <View className="w-full max-w-sm self-center py-10">
+                <Text className="text-[10px] font-semibold uppercase tracking-[1.8px] text-brand">
+                  {isRegister ? "Create your account" : "Welcome back"}
                 </Text>
-              </Text>
-            </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
+                <Text className="mt-2 text-[2rem] font-bold leading-[35px] tracking-[-0.8px] text-foreground">
+                  {isRegister ? "Join the studio." : "Sign in to ZYRAVA."}
+                </Text>
+                <Text className="mt-2 text-sm text-muted" style={{ lineHeight: 20 }}>
+                  {isRegister
+                    ? "One account for your queue, saved mixes and the console."
+                    : "Your queue and saved mixes are waiting."}
+                </Text>
+
+                <View className="mt-7 gap-4">
+                  {isRegister ? (
+                    <>
+                      {/* Register: which credential opens the account. */}
+                      <View className="flex-row gap-1 rounded-xl border border-separator bg-surface p-1">
+                        {(["email", "phone"] as const).map((option) => (
+                          <Pressable
+                            key={option}
+                            onPress={() => {
+                              setMethod(option);
+                              setErrors({});
+                            }}
+                            accessibilityRole="button"
+                            accessibilityState={{ selected: method === option }}
+                            className={cn(
+                              "h-9 flex-1 flex-row items-center justify-center gap-2 rounded-lg text-xs font-semibold",
+                              method === option ? "bg-accent text-accent-foreground" : "text-muted"
+                            )}
+                          >
+                            {option === "email" ? (
+                              <Mail
+                                size={14}
+                                color={method === option ? accentForeground : muted}
+                              />
+                            ) : (
+                              <Phone
+                                size={14}
+                                color={method === option ? accentForeground : muted}
+                              />
+                            )}
+                            <Text
+                              style={{
+                                color: method === option ? accentForeground : muted,
+                                fontSize: 12,
+                                fontWeight: "600",
+                              }}
+                            >
+                              {option === "email" ? "Email" : "Phone"}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+
+                      <View className="gap-1.5">
+                        {label("Name", "(optional)")}
+                        <View className="relative">
+                          <View pointerEvents="none" style={styles.leadingIcon}>
+                            <User size={16} color={muted} />
+                          </View>
+                          <Input
+                            ref={(input) => {
+                              inputRefs.current.name = input;
+                            }}
+                            onFocus={() => focusInput("name")}
+                            onBlur={() => blurInput("name")}
+                            type="text"
+                            value={name}
+                            onChange={(event) => setName(event.target.value)}
+                            autoComplete="name"
+                            placeholder="Your name"
+                            className="h-11 w-full rounded-xl ps-10"
+                            aria-invalid={Boolean(errors.name)}
+                          />
+                        </View>
+                        {fieldError("name")}
+                      </View>
+
+                      {method === "email" ? (
+                        <View className="gap-1.5">
+                          {label("Email")}
+                          <View className="relative">
+                            <View pointerEvents="none" style={styles.leadingIcon}>
+                              <Mail size={16} color={muted} />
+                            </View>
+                            <Input
+                              ref={(input) => {
+                                inputRefs.current.email = input;
+                              }}
+                              onFocus={() => focusInput("email")}
+                              onBlur={() => blurInput("email")}
+                              type="email"
+                              value={email}
+                              onChange={(event) => setEmail(event.target.value)}
+                              autoComplete="email"
+                              placeholder="you@example.com"
+                              className="h-11 w-full rounded-xl ps-10"
+                              aria-invalid={Boolean(errors.email)}
+                            />
+                          </View>
+                          {fieldError("email")}
+                        </View>
+                      ) : (
+                        <View className="gap-1.5">
+                          {label("Phone number")}
+                          <View className="relative">
+                            <View pointerEvents="none" style={styles.leadingIcon}>
+                              <Phone size={16} color={muted} />
+                            </View>
+                            <Input
+                              ref={(input) => {
+                                inputRefs.current.phone = input;
+                              }}
+                              onFocus={() => focusInput("phone")}
+                              onBlur={() => blurInput("phone")}
+                              type="tel"
+                              value={phone}
+                              onChange={(event) => setPhone(event.target.value)}
+                              autoComplete="tel"
+                              placeholder="+91 98765 43210"
+                              className="h-11 w-full rounded-xl ps-10"
+                              aria-invalid={Boolean(errors.phone)}
+                            />
+                          </View>
+                          {fieldError("phone")}
+                        </View>
+                      )}
+                    </>
+                  ) : (
+                    <View className="gap-1.5">
+                      {label("Email or phone")}
+                      <View className="relative">
+                        <View pointerEvents="none" style={styles.leadingIcon}>
+                          <Mail size={16} color={muted} />
+                        </View>
+                        <Input
+                          ref={(input) => {
+                            inputRefs.current.identifier = input;
+                          }}
+                          onFocus={() => focusInput("identifier")}
+                          onBlur={() => blurInput("identifier")}
+                          type="text"
+                          value={identifier}
+                          onChange={(event) => setIdentifier(event.target.value)}
+                          autoComplete="username"
+                          placeholder="you@example.com or +91…"
+                          className="h-11 w-full rounded-xl ps-10"
+                          aria-invalid={Boolean(errors.identifier)}
+                        />
+                      </View>
+                      {fieldError("identifier")}
+                    </View>
+                  )}
+
+                  <View className="gap-1.5">
+                    {label("Password")}
+                    <View className="relative">
+                      <View pointerEvents="none" style={styles.leadingIcon}>
+                        <Lock size={16} color={muted} />
+                      </View>
+                      <Input
+                        ref={(input) => {
+                          inputRefs.current.password = input;
+                        }}
+                        onFocus={() => focusInput("password")}
+                        onBlur={() => blurInput("password")}
+                        type={showPassword ? "text" : "password"}
+                        value={password}
+                        onChange={(event) => setPassword(event.target.value)}
+                        autoComplete={isRegister ? "new-password" : "current-password"}
+                        placeholder={isRegister ? "At least 8 characters" : "Your password"}
+                        className="h-11 w-full rounded-xl ps-10 pe-11"
+                        aria-invalid={Boolean(errors.password)}
+                        /* The native stand-in for pressing Enter in the web form. */
+                        returnKeyType="go"
+                        onSubmitEditing={() => void submit()}
+                      />
+                      <Pressable
+                        onPress={() => setShowPassword((visible) => !visible)}
+                        accessibilityRole="button"
+                        accessibilityLabel={showPassword ? "Hide password" : "Show password"}
+                        className="absolute end-1.5 size-8 items-center justify-center rounded-lg"
+                        style={{ top: 6 }}
+                      >
+                        {showPassword ? (
+                          <EyeOff size={16} color={muted} />
+                        ) : (
+                          <Eye size={16} color={muted} />
+                        )}
+                      </Pressable>
+                    </View>
+                    {fieldError("password")}
+                  </View>
+
+                  <Pressable
+                    onPress={() => setRemember((value) => !value)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: remember }}
+                    className="flex-row items-center gap-2.5 self-start"
+                  >
+                    <View
+                      className="size-4 items-center justify-center rounded border"
+                      style={{
+                        borderColor: "#34d399",
+                        backgroundColor: remember ? "#34d399" : "rgba(52, 211, 153, 0.12)",
+                      }}
+                    >
+                      {remember ? <Check size={12} color="#052e16" strokeWidth={3} /> : null}
+                    </View>
+                    <Text className="text-xs font-medium" style={{ color: "#34d399" }}>
+                      Remember me for 30 days
+                    </Text>
+                  </Pressable>
+
+                  {formError ? (
+                    <View
+                      accessibilityRole="alert"
+                      className="rounded-lg border border-danger/30 bg-danger-soft px-3 py-2"
+                    >
+                      <Text className="text-xs font-medium text-danger-soft-foreground">
+                        {formError}
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  <ClickButton
+                    onPress={() => void submit()}
+                    loading={busy || status === "loading"}
+                    className="h-11 w-full rounded-none text-[13px] font-semibold"
+                  >
+                    {busy || status === "loading"
+                      ? "One moment…"
+                      : isRegister
+                        ? "Create account"
+                        : "Sign in"}
+                  </ClickButton>
+                </View>
+
+                <Text className="mt-6 text-center text-xs text-muted">
+                  {isRegister ? "Already have an account?" : "New to ZYRAVA?"}{" "}
+                  <Text
+                    onPress={() => {
+                      Keyboard.dismiss();
+                      router.push(isRegister ? "/login" : "/register");
+                    }}
+                    className="font-semibold text-brand"
+                  >
+                    {isRegister ? "Sign in" : "Create one"}
+                  </Text>
+                </Text>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
       </SafeAreaView>
       {busy || status === "loading" ? (
         <View style={StyleSheet.absoluteFill}>
@@ -487,7 +621,13 @@ export function AuthScreen({
    the typographic tracking lives in `tracking-[…]` classes (em values
    resolved to px once, exactly what the browser computes). */
 const styles = StyleSheet.create({
-  scroller: { flexGrow: 1, justifyContent: "center", paddingHorizontal: 20, paddingVertical: 8 },
+  scroller: {
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 32,
+  },
   leadingIcon: {
     position: "absolute",
     left: 12,

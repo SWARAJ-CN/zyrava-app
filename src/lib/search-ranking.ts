@@ -57,7 +57,7 @@ function coverage(query: string, field: string): number {
 }
 
 const VERSIONS =
-  /\b(remix(?:ed)?|instrumental|karaoke|tribute|cover|acoustic|slowed|sped up|reverb|nightcore|remaster(?:ed)?|radio edit)\b/g;
+  /\b(remix(?:ed)?|instrumental|karaoke|tribute|cover|acoustic|slowed|sped up|reverb|nightcore|remaster(?:ed)?|radio edit|variation|rework|lofi|lo fi|piano|ringtone)\b/g;
 export function recordingVersion(title: string): string {
   const versions = new Set(searchText(title).match(VERSIONS) ?? []);
   if (/[(\[]live\b|[-–—]\s*live\b/i.test(title)) versions.add("live");
@@ -66,7 +66,7 @@ export function recordingVersion(title: string): string {
 
 export function songSearchScore(song: Song, query: string): number {
   const intent = parseSongQuery(query);
-  const title = searchText(song.title);
+  const title = searchText(song.title.replace(/\s*[([]from\s+.*?[)\]]/gi, ""));
   const artist = searchText(song.artist);
   const album = searchText(song.album);
   let score: number;
@@ -94,9 +94,10 @@ export function songSearchScore(song: Song, query: string): number {
     // Album words may help discovery, but cannot beat a title/artist match.
     score += coverage(intent.text, album) * 8;
   }
-  const versions = new Set(`${title} ${album}`.match(VERSIONS) ?? []);
+  const versionArtist = /\b(instrumental|karaoke|tribute)\b/.test(artist) ? artist : "";
+  const versions = new Set(`${title} ${album} ${versionArtist}`.match(VERSIONS) ?? []);
   for (const version of versions) {
-    if (!intent.text.includes(version)) score -= version.startsWith("remaster") ? 6 : 45;
+    if (!intent.text.includes(version)) score -= version.startsWith("remaster") ? 6 : 180;
     else if (title.includes(version)) score += 35;
   }
   // “Live Forever” is a title; only marked live versions get this penalty.
@@ -114,17 +115,22 @@ export function rankSearchResults(songs: Song[], query: string): Song[] {
 /** Metadata match only: never claims a recording is an authenticated original. */
 export function isStrongSongMatch(song: Song, query: string): boolean {
   const intent = parseSongQuery(query);
-  const title = searchText(song.title);
-  if (intent.artist)
-    return (
-      title === intent.title &&
-      coverage(intent.artist, searchText(song.artist)) >= 0.8 &&
-      !recordingVersion(`${song.title} ${song.album}`)
-    );
-  const unmarked = !recordingVersion(`${song.title} ${song.album}`) && !/[([]/.test(song.title);
+  const title = searchText(song.title.replace(/\s*[([]from\s+.*?[)\]]/gi, ""));
+  const artist = searchText(song.artist);
+  const versionArtist = /\b(instrumental|karaoke|tribute)\b/.test(artist) ? artist : "";
+  const versions = new Set(
+    `${searchText(song.title)} ${searchText(song.album)} ${versionArtist}`.match(VERSIONS) ?? []
+  );
+  if (
+    [...versions].some(
+      (version) => !intent.text.includes(version) && !version.startsWith("remaster")
+    )
+  )
+    return false;
+  if (/[(\[]live\b|[-–—]\s*live\b/i.test(song.title) && !/\blive\b/.test(intent.text)) return false;
+  if (intent.artist) return title === intent.title && coverage(intent.artist, artist) >= 0.8;
   return (
-    (title === intent.text ||
-      coverage(intent.text, `${title} ${searchText(song.artist)}`) >= 0.98) &&
-    unmarked
+    title === intent.text ||
+    (coverage(intent.text, `${title} ${artist}`) >= 0.98 && !/[([]/.test(song.title))
   );
 }

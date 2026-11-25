@@ -169,7 +169,12 @@ function RowActions({ song, device }: { song: Song; device: boolean }) {
         }
         className={ROW_ACTION}
       >
-        <Icon name="heart" className={cn("size-4", isLiked(song) && "fill-danger text-danger")} />
+        <Icon
+          name="heart"
+          className="size-4"
+          color={isLiked(song) ? "#ff0000" : undefined}
+          fill={isLiked(song) ? "#ff0000" : "none"}
+        />
       </Pressable>
       <Pressable
         accessibilityRole="button"

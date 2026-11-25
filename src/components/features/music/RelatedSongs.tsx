@@ -237,7 +237,9 @@ function PickRow({
       >
         <Icon
           name="heart"
-          className={cn("size-4 text-muted", liked && "fill-danger text-danger")}
+          className="size-4 text-muted"
+          color={liked ? "#ff0000" : undefined}
+          fill={liked ? "#ff0000" : "none"}
         />
       </Pressable>
     </View>

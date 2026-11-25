@@ -10,7 +10,7 @@ interface Pricing {
   currency: string;
   configured: boolean;
 }
-export function useCustomizationCheckout() {
+export function useCustomizationCheckout(mode: "customization" | "donation" = "customization") {
   const { user } = useAuth();
   const { refresh } = useCustomization();
   const [pricing, setPricing] = useState<Pricing | null>(null);
@@ -20,7 +20,7 @@ export function useCustomizationCheckout() {
   const [message, setMessage] = useState<string | null>(null);
   const lock = useRef(false);
   const alive = useRef(true);
-  const attemptKey = `zyrava:checkout-attempt:${user?.id}`;
+  const attemptKey = `zyrava:checkout-attempt:${user?.id}:${mode}`;
   const reload = useCallback(async () => {
     const [price, payments] = await Promise.all([
       apiFetch<Pricing>("/api/customization/payments/config"),
@@ -28,9 +28,13 @@ export function useCustomizationCheckout() {
     ]);
     if (alive.current) {
       setPricing(price);
-      setPending(payments.payments);
+      setPending(
+        payments.payments.filter((p) =>
+          mode === "donation" ? p.purpose === "donation" : p.purpose !== "donation"
+        )
+      );
     }
-  }, []);
+  }, [mode]);
   useEffect(() => {
     alive.current = true;
     void reload().catch((e) => {
@@ -47,8 +51,13 @@ export function useCustomizationCheckout() {
     });
     if (result.fulfilled) {
       removeItem(attemptKey);
-      await refresh();
-      if (alive.current) setMessage("Payment confirmed. Your customization has been saved.");
+      if (payment.purpose !== "donation") await refresh();
+      if (alive.current)
+        setMessage(
+          payment.purpose === "donation"
+            ? "Thank you for the mug! Your support helps keep Zyrava growing."
+            : "Payment confirmed. Your customization has been saved."
+        );
     }
     return result.fulfilled;
   };
@@ -103,6 +112,23 @@ export function useCustomizationCheckout() {
         throw e;
       }
     });
+  const donate = (amount: number) =>
+    run(async () => {
+      if (!pricing?.configured) throw new Error("Support payments are not available right now.");
+      if (!Number.isSafeInteger(amount) || amount < 100 || amount > 1000000)
+        throw new Error("Choose an amount between ₹1 and ₹10,000.");
+      const fingerprint = JSON.stringify({ purpose: "donation", amount });
+      let attempt = readJson<{ fingerprint: string; requestId: string } | null>(attemptKey, null);
+      if (attempt?.fingerprint !== fingerprint) {
+        attempt = { fingerprint, requestId: checkoutRequestId() };
+        writeJson(attemptKey, attempt);
+      }
+      const payment = await apiFetch<CustomizationPayment>("/api/customization/donations/order", {
+        method: "POST",
+        body: { amount, requestId: attempt.requestId },
+      });
+      await open(payment);
+    });
   return {
     pricing,
     pending,
@@ -110,6 +136,7 @@ export function useCustomizationCheckout() {
     busy,
     message,
     pay,
+    donate,
     reload,
     resume: (payment: CustomizationPayment) => run(() => open(payment)),
     check: (payment: CustomizationPayment) =>

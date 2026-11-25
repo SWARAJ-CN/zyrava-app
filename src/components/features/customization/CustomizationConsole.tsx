@@ -18,10 +18,7 @@ import {
   type CustomizationConfig,
   type CustomizationPerson,
 } from "@/lib/customization";
-import { formatPaymentAmount } from "@/lib/customization-payment";
 import { ColorPalettePicker } from "./ColorPalettePicker";
-import { Checkout } from "./Checkout";
-import { useCustomizationCheckout } from "./useCustomizationCheckout";
 
 function Field({
   label,
@@ -58,10 +55,15 @@ const SLOTS: { key: Slot; label: string }[] = [
   { key: "lyricsAnimation", label: "Lyrics background" },
 ];
 
-export function CustomizationConsole({ active = true }: { active?: boolean }) {
+export function CustomizationConsole({
+  active = true,
+  onSupport,
+}: {
+  active?: boolean;
+  onSupport?: () => void;
+}) {
   const { user } = useAuth();
   const customization = useCustomization();
-  const payment = useCustomizationCheckout();
   const [template, setTemplate] = useState<"partner" | "birthday">("partner");
   const [drafts, setDrafts] = useState({
     partner: { ...DEFAULT_CUSTOMIZATION },
@@ -82,8 +84,10 @@ export function CustomizationConsole({ active = true }: { active?: boolean }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [mutating, setMutating] = useState(false);
   const searchVersion = useRef(0);
+  const mutationLock = useRef(false);
   const run = async (action: () => Promise<unknown>) => {
-    if (mutating) return;
+    if (mutationLock.current) return;
+    mutationLock.current = true;
     setMutating(true);
     setNotice(null);
     try {
@@ -91,6 +95,7 @@ export function CustomizationConsole({ active = true }: { active?: boolean }) {
     } catch (e) {
       setNotice(e instanceof Error ? e.message : "Please try again.");
     } finally {
+      mutationLock.current = false;
       setMutating(false);
     }
   };
@@ -120,7 +125,7 @@ export function CustomizationConsole({ active = true }: { active?: boolean }) {
     contrast(draft.text, draft.background) >= 4.5 &&
     contrast(draft.text, draft.surface) >= 4.5;
   const preview = valid ? draft : DEFAULT_CUSTOMIZATION;
-  const busy = payment.busy || !!payment.checkout;
+  const busy = mutating;
   return (
     <ScrollView
       keyboardShouldPersistTaps="handled"
@@ -319,66 +324,45 @@ export function CustomizationConsole({ active = true }: { active?: boolean }) {
         </Text>
       ) : null}
       <Button
-        loading={payment.busy}
-        disabled={busy || !valid || !readable || !payment.pricing?.configured}
-        onPress={() => void payment.pay(recipient?.id || user.id, draft)}
-      >
-        {payment.pricing
-          ? `Pay ${formatPaymentAmount(payment.pricing.amount, payment.pricing.currency)} and ${recipient && recipient.id !== user.id ? "send" : "apply"}`
-          : "Loading price…"}
-      </Button>
-      {!payment.pricing?.configured ? (
-        <Text className="text-sm text-muted">
-          Payment availability and price are controlled by the administrator.
-        </Text>
-      ) : null}
-      {payment.message || notice || customization.error ? (
-        <Text accessibilityLiveRegion="polite" className="text-sm text-foreground">
-          {payment.message || notice || customization.error}
-        </Text>
-      ) : null}
-      <Button
-        variant="ghost"
+        loading={mutating}
+        disabled={busy || !valid || !readable}
         onPress={() =>
           void run(async () => {
+            await apiFetch("/api/customization/save", {
+              method: "POST",
+              body: { recipientId: recipient?.id || user.id, config: draft },
+            });
             await customization.refresh();
-            await payment.reload();
+            setNotice(
+              recipient && recipient.id !== user.id
+                ? "Customization sent. They can choose to accept it."
+                : "Your customization is applied."
+            );
           })
         }
-        loading={mutating}
       >
+        {recipient && recipient.id !== user.id ? "Send customization" : "Apply customization"}
+      </Button>
+      <View className="gap-3 rounded-2xl bg-surface-secondary p-5">
+        <Text className="text-base font-semibold text-foreground">
+          Made with care. Yours to customize.
+        </Text>
+        <Text className="text-sm leading-6 text-muted">
+          Customization is free. If Zyrava makes your day a little better, a virtual mug helps me
+          keep building.
+        </Text>
+        <Button variant="secondary" onPress={onSupport} disabled={!onSupport}>
+          Buy A Mug
+        </Button>
+      </View>
+      {notice || customization.error ? (
+        <Text accessibilityLiveRegion="polite" className="text-sm text-foreground">
+          {notice || customization.error}
+        </Text>
+      ) : null}
+      <Button variant="ghost" loading={mutating} onPress={() => void run(customization.refresh)}>
         Refresh
       </Button>
-      {payment.pending
-        .filter((p) => p.status !== "fulfilled")
-        .map((p) => (
-          <View key={p.id} className="gap-3 rounded-2xl bg-surface p-4">
-            <Text className="font-semibold text-foreground">
-              {p.title} · {formatPaymentAmount(p.amount, p.currency)}
-            </Text>
-            <Text className="text-xs text-muted">
-              An existing checkout is waiting. Check it before starting another payment.
-            </Text>
-            <View className="flex-row gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={busy}
-                onPress={() => void payment.check(p)}
-              >
-                Check payment
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={busy}
-                onPress={() => void payment.resume(p)}
-              >
-                Resume checkout
-              </Button>
-            </View>
-          </View>
-        ))}
       <View className="gap-3">
         <Text className="text-lg font-semibold text-foreground">Received for you</Text>
         {customization.state.incoming.length + customization.state.received.length === 0 ? (
@@ -499,7 +483,6 @@ export function CustomizationConsole({ active = true }: { active?: boolean }) {
           ))}
         </Modal>
       ) : null}
-      {payment.checkout ? <Checkout payment={payment.checkout} onClose={payment.close} /> : null}
     </ScrollView>
   );
 }
